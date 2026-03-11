@@ -47,6 +47,7 @@ class PortfolioScreen(Screen):
         Binding("i", "import_csv", "Import CSV"),
         Binding("o", "cycle_sort", "Sort"),
         Binding("c", "cycle_currency", "Currency"),
+        Binding("a", "allocation", "Allocation"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -63,7 +64,7 @@ class PortfolioScreen(Screen):
 
     def on_mount(self) -> None:
         table = self.query_one("#holdings-table", DataTable)
-        table.add_columns("Ticker", "Name", "Shares", "Avg Cost", "Price", "Value", "P&L", "P&L %")
+        table.add_columns("Ticker", "Name", "Shares", "Avg Cost", "Price", "Value", "P&L", "P&L %", "Alloc %")
         table.display = False
         self.query_one("#big-value").display = False
         self.query_one("#price-chart").display = False
@@ -236,12 +237,12 @@ class PortfolioScreen(Screen):
         sorted_rows = self._sorted_rows()
         self._tickers = [r["ticker"] for r in sorted_rows]
 
-        total_value = 0.0
+        total_value = sum(r["value"] for r in sorted_rows)
         total_cost = 0.0
 
         for r in sorted_rows:
-            total_value += r["value"]
             total_cost += r["shares"] * r["avg"]
+            alloc_pct = (r["value"] / total_value * 100) if total_value > 0 else 0.0
             table.add_row(
                 r["ticker"],
                 Text(r["name"][:25]),
@@ -251,6 +252,7 @@ class PortfolioScreen(Screen):
                 Text(f"{r['value']:,.2f}", justify="right"),
                 format_pnl(r["pnl"]),
                 format_pct(r["pnl_pct"]),
+                Text(f"{alloc_pct:.1f}%", justify="right"),
             )
 
         total_pnl = total_value - total_cost
@@ -317,6 +319,199 @@ class PortfolioScreen(Screen):
     def _on_import(self, result: dict | None) -> None:
         if result and result.get("imported", 0) > 0:
             self.refresh_data()
+
+    def action_allocation(self) -> None:
+        self.app.push_screen(AllocationScreen(self._display_currency))
+
+
+class AllocationScreen(Screen):
+    """Allocation breakdown and top 10 look-through underlying holdings."""
+
+    BINDINGS = [
+        Binding("escape", "go_back", "Back"),
+    ]
+
+    def __init__(self, display_currency: str = "USD"):
+        super().__init__()
+        self._display_currency = display_currency
+
+    def compose(self) -> ComposeResult:
+        yield Static(
+            "[bold #5b9bd5]Portfolio Allocation & Top Holdings[/]",
+            id="allocation-header",
+        )
+        yield LoadingIndicator("Analyzing portfolio holdings...", id="loading")
+        yield Static("", id="allocation-summary")
+        yield DataTable(id="allocation-table", cursor_type="row")
+        yield Static("[bold #5b9bd5]Top 10 Underlying Holdings (Look-Through)[/]", id="lookthrough-title")
+        yield DataTable(id="lookthrough-table", cursor_type="row")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        alloc_table = self.query_one("#allocation-table", DataTable)
+        alloc_table.add_columns("#", "Ticker", "Name", "Value", "Alloc %", "Type")
+        alloc_table.display = False
+
+        lt_table = self.query_one("#lookthrough-table", DataTable)
+        lt_table.add_columns("#", "Stock", "Name", "Exposure %", "Via ETFs")
+        lt_table.display = False
+
+        self.query_one("#allocation-summary").display = False
+        self.query_one("#lookthrough-title").display = False
+
+        self.load_data()
+
+    @work(thread=True)
+    def load_data(self) -> None:
+        portfolio: Portfolio = self.app.portfolio  # type: ignore[attr-defined]
+        holdings = portfolio.get_holdings()
+        if not holdings:
+            self.app.call_from_thread(self._show_empty)
+            return
+
+        tickers = sorted(holdings.keys())
+        prices = get_prices(tickers)
+
+        # Get FX rates
+        native_currencies = [prices.get(t, {}).get("currency", "USD") for t in tickers]
+        fx_rates = get_exchange_rates(self._display_currency, native_currencies)
+
+        # Compute values in display currency
+        rows = []
+        for ticker in tickers:
+            info = prices.get(ticker, {})
+            price = info.get("price", 0)
+            name = info.get("name", ticker)
+            native_currency = info.get("currency", "USD")
+            fx = fx_rates.get(native_currency, 1.0)
+            shares = holdings[ticker]
+            value = shares * price * fx
+            rows.append({"ticker": ticker, "name": name, "value": value, "shares": shares})
+
+        total_value = sum(r["value"] for r in rows)
+        rows.sort(key=lambda r: r["value"], reverse=True)
+
+        # Get ticker info to determine types and fetch ETF holdings for look-through
+        # Try get_etf_holdings for all fund types (ETF, MUTUALFUND, etc.) — not just ETFs
+        ticker_types = {}
+        etf_holdings_map = {}
+        for ticker in tickers:
+            tinfo = get_ticker_info(ticker)
+            qtype = tinfo.get("quote_type", "EQUITY")
+            ticker_types[ticker] = qtype
+            if qtype != "EQUITY":
+                etf_h = get_etf_holdings(ticker)
+                if etf_h:
+                    etf_holdings_map[ticker] = etf_h
+
+        # Build look-through: aggregate underlying stock exposure
+        underlying: dict[str, dict] = {}  # symbol -> {name, exposure_pct, sources}
+        for r in rows:
+            ticker = r["ticker"]
+            alloc_pct = (r["value"] / total_value * 100) if total_value > 0 else 0
+            if ticker in etf_holdings_map:
+                # ETF: distribute its allocation to underlying stocks
+                for h in etf_holdings_map[ticker]:
+                    sym = h["symbol"]
+                    effective_pct = alloc_pct * h["weight"] / 100
+                    if sym in underlying:
+                        underlying[sym]["exposure_pct"] += effective_pct
+                        underlying[sym]["sources"].append(ticker)
+                    else:
+                        underlying[sym] = {
+                            "name": h.get("name", sym),
+                            "exposure_pct": effective_pct,
+                            "sources": [ticker],
+                        }
+            else:
+                # Individual stock: counts as direct exposure
+                sym = ticker
+                if sym in underlying:
+                    underlying[sym]["exposure_pct"] += alloc_pct
+                    underlying[sym]["sources"].append("Direct")
+                else:
+                    underlying[sym] = {
+                        "name": r["name"],
+                        "exposure_pct": alloc_pct,
+                        "sources": ["Direct"],
+                    }
+
+        # Sort underlying by exposure, take top 10
+        top_underlying = sorted(
+            underlying.items(), key=lambda x: x[1]["exposure_pct"], reverse=True
+        )[:10]
+
+        resolved_tickers = set(etf_holdings_map.keys())
+        self.app.call_from_thread(
+            self._update_tables, rows, total_value, ticker_types, top_underlying, resolved_tickers,
+        )
+
+    def _show_empty(self) -> None:
+        self.query_one("#loading").display = False
+        self.query_one("#allocation-summary", Static).update("[dim]No holdings to analyze.[/]")
+        self.query_one("#allocation-summary").display = True
+
+    def _update_tables(
+        self,
+        rows: list[dict],
+        total_value: float,
+        ticker_types: dict[str, str],
+        top_underlying: list[tuple[str, dict]],
+        resolved_tickers: set[str] | None = None,
+    ) -> None:
+        resolved_tickers = resolved_tickers or set()
+        self.query_one("#loading").display = False
+
+        # Update summary
+        summary = self.query_one("#allocation-summary", Static)
+        n_funds = sum(1 for t in ticker_types.values() if t != "EQUITY")
+        n_resolved = len(resolved_tickers)
+        n_stocks = len(ticker_types) - n_funds
+        summary.update(
+            f"[bold]{len(rows)}[/] holdings    "
+            f"[#5b9bd5]{n_funds}[/] Funds ({n_resolved} resolved)    "
+            f"[#5b9bd5]{n_stocks}[/] Stocks    "
+            f"Total: [bold]{total_value:,.0f}[/] {self._display_currency}"
+        )
+        summary.display = True
+
+        # Fill allocation table
+        alloc_table = self.query_one("#allocation-table", DataTable)
+        alloc_table.display = True
+        alloc_table.clear()
+
+        for i, r in enumerate(rows, 1):
+            alloc_pct = (r["value"] / total_value * 100) if total_value > 0 else 0
+            qtype = ticker_types.get(r["ticker"], "EQUITY")
+            resolved = r["ticker"] in resolved_tickers
+            type_label = f"{qtype}" + (" *" if resolved else "")
+            alloc_table.add_row(
+                str(i),
+                r["ticker"],
+                Text(r["name"][:30]),
+                Text(f"{r['value']:,.0f}", justify="right"),
+                Text(f"{alloc_pct:.1f}%", justify="right"),
+                type_label,
+            )
+
+        # Fill look-through table
+        self.query_one("#lookthrough-title").display = True
+        lt_table = self.query_one("#lookthrough-table", DataTable)
+        lt_table.display = True
+        lt_table.clear()
+
+        for i, (sym, data) in enumerate(top_underlying, 1):
+            sources = ", ".join(dict.fromkeys(data["sources"]))  # deduplicate, preserve order
+            lt_table.add_row(
+                str(i),
+                sym,
+                Text(data["name"][:30]),
+                Text(f"{data['exposure_pct']:.2f}%", justify="right"),
+                Text(sources[:40]),
+            )
+
+    def action_go_back(self) -> None:
+        self.app.pop_screen()
 
 
 class DrillDownScreen(Screen):

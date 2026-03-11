@@ -258,6 +258,38 @@ HelpOverlay {
     color: $text-primary;
     content-align: left middle;
 }
+
+/* Allocation screen */
+#allocation-header {
+    dock: top;
+    height: 3;
+    padding: 0 2;
+    background: $surface;
+    color: $text-primary;
+    content-align: left middle;
+}
+
+#allocation-summary {
+    height: 2;
+    padding: 0 2;
+    color: $text-primary;
+}
+
+#allocation-table {
+    height: 1fr;
+    max-height: 50%;
+}
+
+#lookthrough-title {
+    height: 2;
+    padding: 0 2;
+    color: $accent;
+    text-style: bold;
+}
+
+#lookthrough-table {
+    height: 1fr;
+}
 """
 
 
@@ -531,7 +563,7 @@ class HelpOverlay(ModalScreen):
                 "[bold #5b9bd5]Portfolio View[/]\n"
                 "  ↑↓  Navigate    Enter  Drill into ETF\n"
                 "  b   Buy         s      Sell\n"
-                "  t   Transactions",
+                "  t   Transactions a  Allocation",
                 classes="help-section",
             )
             yield Static(
