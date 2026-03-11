@@ -26,8 +26,7 @@ Screen {
     background: $background;
 }
 
-#portfolio-header {
-    dock: top;
+.portfolio-header {
     height: 3;
     padding: 0 2;
     background: $surface;
@@ -35,7 +34,7 @@ Screen {
     content-align: left middle;
 }
 
-#portfolio-header .label {
+.portfolio-header .label {
     text-style: bold;
     color: $accent;
 }
@@ -208,11 +207,36 @@ HelpOverlay {
 }
 
 /* Big value display */
-#big-value {
+.big-value {
     height: 9;
     padding: 0 2;
     content-align: center middle;
     color: $text-primary;
+}
+
+/* Price chart inside PortfolioView */
+.view-chart {
+    height: 15;
+    margin: 0 1;
+}
+
+.view-loading {
+    width: 1fr;
+    height: 1fr;
+    content-align: center middle;
+    color: $text-secondary;
+}
+
+.view-empty {
+    width: 1fr;
+    height: 1fr;
+    content-align: center middle;
+    color: $text-secondary;
+}
+
+/* PortfolioView container */
+PortfolioView {
+    height: 1fr;
 }
 
 /* Stock detail */
@@ -289,6 +313,37 @@ HelpOverlay {
 
 #lookthrough-table {
     height: 1fr;
+}
+
+/* Tabbed portfolios */
+TabbedContent {
+    height: 1fr;
+}
+
+TabPane {
+    height: 1fr;
+    padding: 0;
+}
+
+Tabs {
+    dock: top;
+    height: 3;
+    background: $surface;
+}
+
+Tab {
+    color: $text-secondary;
+    padding: 0 2;
+}
+
+Tab.-active {
+    color: $accent;
+    text-style: bold;
+}
+
+/* Create Portfolio Modal — reuses modal-dialog styles */
+CreatePortfolioModal {
+    align: center middle;
 }
 """
 
@@ -563,7 +618,10 @@ class HelpOverlay(ModalScreen):
                 "[bold #5b9bd5]Portfolio View[/]\n"
                 "  ↑↓  Navigate    Enter  Drill into ETF\n"
                 "  b   Buy         s      Sell\n"
-                "  t   Transactions a  Allocation",
+                "  t   Transactions a  Allocation\n"
+                "  o   Sort        c  Currency\n"
+                "  i   Import CSV  n  New Portfolio\n"
+                "  1-9 Switch portfolio tabs",
                 classes="help-section",
             )
             yield Static(
@@ -586,9 +644,10 @@ class TransactionModal(ModalScreen[dict | None]):
         Binding("escape", "cancel", "Cancel"),
     ]
 
-    def __init__(self, txn_type: str = "buy"):
+    def __init__(self, txn_type: str = "buy", portfolio_name: str = ""):
         super().__init__()
         self.txn_type = txn_type
+        self.portfolio_name = portfolio_name
 
     def compose(self) -> ComposeResult:
         title = f"Add Transaction — {self.txn_type.upper()}"
@@ -604,6 +663,8 @@ class TransactionModal(ModalScreen[dict | None]):
             yield Input(value=date.today().isoformat(), id="input-date")
             yield Label("Note (optional)", classes="field-label")
             yield Input(placeholder="", id="input-note")
+            yield Label("Portfolio", classes="field-label")
+            yield Input(value=self.portfolio_name, id="input-portfolio", placeholder="(leave empty for untagged)")
             yield Static("", id="modal-error")
             with Horizontal(id="modal-buttons"):
                 yield Button("Confirm", id="btn-confirm", variant="primary")
@@ -648,6 +709,8 @@ class TransactionModal(ModalScreen[dict | None]):
             error_widget.update("[bold]Date must be YYYY-MM-DD[/]")
             return
 
+        portfolio = self.query_one("#input-portfolio", Input).value.strip()
+
         self.dismiss({
             "ticker": ticker,
             "type": self.txn_type,
@@ -655,6 +718,7 @@ class TransactionModal(ModalScreen[dict | None]):
             "price": price,
             "date": date_str,
             "note": note,
+            "portfolio": portfolio,
         })
 
     def action_cancel(self):
@@ -667,6 +731,10 @@ class ImportModal(ModalScreen[dict | None]):
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
     ]
+
+    def __init__(self, portfolio_name: str = ""):
+        super().__init__()
+        self.portfolio_name = portfolio_name
 
     def compose(self) -> ComposeResult:
         with Vertical(id="import-dialog"):
@@ -707,7 +775,7 @@ class ImportModal(ModalScreen[dict | None]):
         error_widget.update("")
         from storage import Portfolio
         portfolio: Portfolio = self.app.portfolio  # type: ignore[attr-defined]
-        result = portfolio.import_csv(path)
+        result = portfolio.import_csv(path, portfolio_name=self.portfolio_name)
 
         imported = result["imported"]
         skipped = result["skipped"]
@@ -730,6 +798,40 @@ class ImportModal(ModalScreen[dict | None]):
             self.dismiss({"imported": imported, "skipped": skipped})
         elif not errors:
             result_widget.update("[#d7ba7d]Nothing new to import[/]")
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
+class CreatePortfolioModal(ModalScreen[str | None]):
+    """Modal for creating a new named portfolio."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-dialog"):
+            yield Static("Create Portfolio", id="modal-title")
+            yield Label("Portfolio name", classes="field-label")
+            yield Input(placeholder="e.g. Retirement", id="input-name")
+            yield Static("", id="modal-error")
+            with Horizontal(id="modal-buttons"):
+                yield Button("Create", id="btn-confirm", variant="primary")
+                yield Button("Cancel", id="btn-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-cancel":
+            self.dismiss(None)
+        elif event.button.id == "btn-confirm":
+            self._submit()
+
+    def _submit(self):
+        name = self.query_one("#input-name", Input).value.strip()
+        if not name:
+            self.query_one("#modal-error", Static).update("[bold]Name is required[/]")
+            return
+        self.dismiss(name)
 
     def action_cancel(self):
         self.dismiss(None)

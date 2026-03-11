@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """Portfolio Tracker — Textual TUI for tracking investments."""
 
+import re
 from datetime import datetime
 
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.containers import Vertical
 from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Static
+from textual.widgets import DataTable, Footer, Static, TabbedContent, TabPane
 from textual import work
 
 from market import clear_cache, get_etf_holdings, get_exchange_rates, get_history, get_prices, get_ticker_info
 from storage import Portfolio, Transaction
 from ui import (
     APP_CSS,
+    CreatePortfolioModal,
     EmptyState,
     HelpOverlay,
     BigValue,
@@ -28,67 +31,73 @@ from ui import (
 )
 
 
-class PortfolioScreen(Screen):
-    """Main screen — portfolio holdings table."""
+SORT_MODES = ["ticker", "value", "pnl_pct_desc", "pnl_pct_asc"]
+SORT_LABELS = {
+    "ticker": "Ticker A→Z",
+    "value": "Value ↓",
+    "pnl_pct_desc": "P&L% ↓",
+    "pnl_pct_asc": "P&L% ↑",
+}
+CURRENCIES = ["USD", "GBP", "EUR", "CHF", "JPY"]
 
-    SORT_MODES = ["ticker", "value", "pnl_pct_desc", "pnl_pct_asc"]
-    SORT_LABELS = {
-        "ticker": "Ticker A→Z",
-        "value": "Value ↓",
-        "pnl_pct_desc": "P&L% ↓",
-        "pnl_pct_asc": "P&L% ↑",
-    }
-    CURRENCIES = ["USD", "GBP", "EUR", "CHF", "JPY"]
 
-    BINDINGS = [
-        Binding("b", "buy", "Buy"),
-        Binding("s", "sell", "Sell"),
-        Binding("t", "transactions", "History"),
-        Binding("i", "import_csv", "Import CSV"),
-        Binding("o", "cycle_sort", "Sort"),
-        Binding("c", "cycle_currency", "Currency"),
-        Binding("a", "allocation", "Allocation"),
-    ]
+def _safe_id(name: str) -> str:
+    """Convert a portfolio name to a valid CSS ID."""
+    return "tab-" + re.sub(r"[^a-z0-9-]", "-", name.lower()).strip("-")
 
-    def compose(self) -> ComposeResult:
-        yield PortfolioHeader(id="portfolio-header")
-        yield BigValue(id="big-value")
-        yield LoadingIndicator("Fetching market data, please wait...", id="loading")
-        yield DataTable(id="holdings-table", cursor_type="row")
-        yield EmptyState(
-            "No holdings yet. Press [bold]b[/] to add your first transaction.",
-            id="empty-state",
-        )
-        yield PriceChart(id="price-chart")
-        yield Footer()
 
-    def on_mount(self) -> None:
-        table = self.query_one("#holdings-table", DataTable)
-        table.add_columns("Ticker", "Name", "Shares", "Avg Cost", "Price", "Value", "P&L", "P&L %", "Alloc %")
-        table.display = False
-        self.query_one("#big-value").display = False
-        self.query_one("#price-chart").display = False
-        self.query_one("#empty-state").display = False
+class PortfolioView(Vertical):
+    """Reusable widget showing holdings for one portfolio (or all)."""
+
+    def __init__(self, portfolio_name: str | None = None, **kwargs):
+        super().__init__(**kwargs)
+        self.portfolio_name = portfolio_name
         self._tickers: list[str] = []
         self._prices: dict[str, dict] = {}
         self._rows: list[dict] = []
-        self._sort_mode = "ticker"
-        self._display_currency = self.app.portfolio.display_currency  # type: ignore[attr-defined]
         self._fx_rates: dict[str, float] = {}
+        self._day_pct = 0.0
+        self._three_month_pct = 0.0
+
+    @property
+    def _portfolio(self) -> Portfolio:
+        return self.app.portfolio  # type: ignore[attr-defined]
+
+    @property
+    def _display_currency(self) -> str:
+        return self._portfolio.display_currency
+
+    @property
+    def _sort_mode(self) -> str:
+        return self._portfolio.sort_mode
+
+    def compose(self) -> ComposeResult:
+        yield PortfolioHeader(classes="portfolio-header")
+        yield BigValue(classes="big-value")
+        yield LoadingIndicator("Fetching market data, please wait...", classes="view-loading")
+        yield DataTable(classes="holdings-table", cursor_type="row")
+        yield EmptyState(
+            "No holdings yet. Press [bold]b[/] to add your first transaction.",
+            classes="view-empty",
+        )
+        yield PriceChart(classes="view-chart")
+
+    def on_mount(self) -> None:
+        table = self.query_one(".holdings-table", DataTable)
+        table.add_columns("Ticker", "Name", "Shares", "Avg Cost", "Price", "Value", "P&L", "P&L %", "Alloc %")
+        table.display = False
+        self.query_one(".big-value").display = False
+        self.query_one(".view-chart").display = False
+        self.query_one(".view-empty").display = False
         self.refresh_data()
         self.set_interval(1800, self.refresh_data)
 
-    def on_screen_resume(self) -> None:
-        self.refresh_data()
-
     @work(thread=True)
     def refresh_data(self) -> None:
-        portfolio: Portfolio = self.app.portfolio  # type: ignore[attr-defined]
-        header = self.query_one("#portfolio-header", PortfolioHeader)
-
+        header = self.query_one(".portfolio-header", PortfolioHeader)
         self.app.call_from_thread(header.update_stats, loading=True)
 
-        holdings = portfolio.get_holdings()
+        holdings = self._portfolio.get_holdings(self.portfolio_name)
         if not holdings:
             self.app.call_from_thread(self._show_empty, True)
             self.app.call_from_thread(header.update_stats, loading=False)
@@ -96,18 +105,15 @@ class PortfolioScreen(Screen):
 
         tickers = sorted(holdings.keys())
         prices = get_prices(tickers)
-        avg_costs = {t: portfolio.get_avg_cost(t) for t in tickers}
+        avg_costs = {t: self._portfolio.get_avg_cost(t, self.portfolio_name) for t in tickers}
 
-        # Fetch exchange rates for currency conversion
         native_currencies = [prices.get(t, {}).get("currency", "USD") for t in tickers]
         fx_rates = get_exchange_rates(self._display_currency, native_currencies)
 
-        # Fetch history for all tickers and compute aggregate portfolio value
         histories = {t: get_history(t) for t in tickers}
         chart_data = self._compute_portfolio_history(holdings, histories)
         self.app.call_from_thread(self._update_chart, chart_data)
 
-        # Compute 3-month change from chart data
         closes = chart_data.get("closes", [])
         three_month_pct = ((closes[-1] / closes[0]) - 1) * 100 if len(closes) >= 2 else 0.0
 
@@ -120,8 +126,6 @@ class PortfolioScreen(Screen):
         holdings: dict[str, float],
         histories: dict[str, dict],
     ) -> dict:
-        """Aggregate per-ticker history into total portfolio value per day."""
-        # Collect all dates with per-ticker close prices
         date_values: dict[str, float] = {}
         all_dates: set[str] = set()
         ticker_data: dict[str, dict[str, float]] = {}
@@ -152,16 +156,17 @@ class PortfolioScreen(Screen):
         }
 
     def _update_chart(self, chart_data: dict) -> None:
-        chart = self.query_one("#price-chart", PriceChart)
+        chart = self.query_one(".view-chart", PriceChart)
         if chart_data["dates"]:
-            chart.set_data("Portfolio", chart_data["dates"], chart_data["closes"])
+            label = self.portfolio_name or "Portfolio"
+            chart.set_data(label, chart_data["dates"], chart_data["closes"])
 
     def _show_empty(self, show: bool) -> None:
-        self.query_one("#loading").display = False
-        self.query_one("#big-value").display = False
-        self.query_one("#empty-state").display = show
-        self.query_one("#holdings-table").display = not show
-        self.query_one("#price-chart").display = not show
+        self.query_one(".view-loading").display = False
+        self.query_one(".big-value").display = False
+        self.query_one(".view-empty").display = show
+        self.query_one(".holdings-table").display = not show
+        self.query_one(".view-chart").display = not show
 
     def _update_table(
         self,
@@ -177,9 +182,8 @@ class PortfolioScreen(Screen):
         self._three_month_pct = three_month_pct
         self._show_empty(False)
 
-        # Build row data for sorting
         self._rows = []
-        self._day_change_value = 0.0
+        day_change_value = 0.0
         total_value_for_day = 0.0
 
         for ticker in tickers:
@@ -197,9 +201,8 @@ class PortfolioScreen(Screen):
             pnl = value - cost
             pnl_pct = (pnl / cost * 100) if cost > 0 else 0.0
 
-            # Track weighted day change
             total_value_for_day += value
-            self._day_change_value += value * (change_pct / 100)
+            day_change_value += value * (change_pct / 100)
 
             self._rows.append({
                 "ticker": ticker, "name": name, "shares": shares,
@@ -207,31 +210,28 @@ class PortfolioScreen(Screen):
                 "pnl": pnl, "pnl_pct": pnl_pct,
             })
 
-        # Compute day change as % of total
-        self._day_pct = (self._day_change_value / (total_value_for_day - self._day_change_value) * 100) if total_value_for_day > self._day_change_value else 0.0
-
+        self._day_pct = (day_change_value / (total_value_for_day - day_change_value) * 100) if total_value_for_day > day_change_value else 0.0
         self._render_table()
 
     def _sorted_rows(self) -> list[dict]:
-        """Return rows sorted by current sort mode."""
         rows = list(self._rows)
-        if self._sort_mode == "ticker":
+        mode = self._sort_mode
+        if mode == "ticker":
             rows.sort(key=lambda r: r["ticker"])
-        elif self._sort_mode == "value":
+        elif mode == "value":
             rows.sort(key=lambda r: r["value"], reverse=True)
-        elif self._sort_mode == "pnl_pct_desc":
+        elif mode == "pnl_pct_desc":
             rows.sort(key=lambda r: r["pnl_pct"], reverse=True)
-        elif self._sort_mode == "pnl_pct_asc":
+        elif mode == "pnl_pct_asc":
             rows.sort(key=lambda r: r["pnl_pct"])
         return rows
 
     def _render_table(self) -> None:
-        """Sort and render rows into the DataTable."""
-        self.query_one("#loading").display = False
-        self.query_one("#big-value").display = True
-        self.query_one("#holdings-table").display = True
-        self.query_one("#price-chart").display = True
-        table = self.query_one("#holdings-table", DataTable)
+        self.query_one(".view-loading").display = False
+        self.query_one(".big-value").display = True
+        self.query_one(".holdings-table").display = True
+        self.query_one(".view-chart").display = True
+        table = self.query_one(".holdings-table", DataTable)
         table.clear()
 
         sorted_rows = self._sorted_rows()
@@ -258,70 +258,194 @@ class PortfolioScreen(Screen):
         total_pnl = total_value - total_cost
         total_pnl_pct = (total_pnl / total_cost * 100) if total_cost > 0 else 0.0
         now = datetime.now().strftime("%H:%M")
-        sort_label = self.SORT_LABELS[self._sort_mode]
-        header = self.query_one("#portfolio-header", PortfolioHeader)
+        sort_label = SORT_LABELS[self._sort_mode]
+        header = self.query_one(".portfolio-header", PortfolioHeader)
         header.update_stats(total_value, total_pnl, total_pnl_pct, now, sort_hint=sort_label)
 
-        big = self.query_one("#big-value", BigValue)
+        big = self.query_one(".big-value", BigValue)
         big.set_value(
             total_value,
             currency=self._display_currency,
             pnl_pct=total_pnl_pct,
-            day_pct=getattr(self, "_day_pct", 0.0),
-            three_month_pct=getattr(self, "_three_month_pct", 0.0),
+            day_pct=self._day_pct,
+            three_month_pct=self._three_month_pct,
         )
 
-    def action_cycle_sort(self) -> None:
-        """Cycle through sort modes."""
+    def cycle_sort(self) -> None:
         if not self._rows:
             return
-        idx = self.SORT_MODES.index(self._sort_mode)
-        self._sort_mode = self.SORT_MODES[(idx + 1) % len(self.SORT_MODES)]
+        idx = SORT_MODES.index(self._sort_mode)
+        new_mode = SORT_MODES[(idx + 1) % len(SORT_MODES)]
+        self._portfolio.sort_mode = new_mode
+        self._portfolio.save()
         self._render_table()
 
-    def action_cycle_currency(self) -> None:
-        """Cycle display currency and refetch exchange rates."""
-        idx = self.CURRENCIES.index(self._display_currency)
-        self._display_currency = self.CURRENCIES[(idx + 1) % len(self.CURRENCIES)]
-        # Persist preference
-        portfolio: Portfolio = self.app.portfolio  # type: ignore[attr-defined]
-        portfolio.display_currency = self._display_currency
-        portfolio.save()
-        # Refetch with new currency
+    def cycle_currency(self) -> None:
+        idx = CURRENCIES.index(self._display_currency)
+        self._portfolio.display_currency = CURRENCIES[(idx + 1) % len(CURRENCIES)]
+        self._portfolio.save()
         self.refresh_data()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """Drill into ETF when Enter is pressed on a row."""
         row_idx = event.cursor_row
         if 0 <= row_idx < len(self._tickers):
             ticker = self._tickers[row_idx]
             name = self._prices.get(ticker, {}).get("name", ticker)
             self.app.push_screen(DrillDownScreen(ticker, name))
 
+
+class PortfolioScreen(Screen):
+    """Main screen with tabbed portfolios."""
+
+    BINDINGS = [
+        Binding("b", "buy", "Buy"),
+        Binding("s", "sell", "Sell"),
+        Binding("t", "transactions", "History"),
+        Binding("i", "import_csv", "Import CSV"),
+        Binding("o", "cycle_sort", "Sort"),
+        Binding("c", "cycle_currency", "Currency"),
+        Binding("a", "allocation", "Allocation"),
+        Binding("n", "new_portfolio", "New Portfolio"),
+        Binding("1", "tab_1", "Tab 1", show=False),
+        Binding("2", "tab_2", "Tab 2", show=False),
+        Binding("3", "tab_3", "Tab 3", show=False),
+        Binding("4", "tab_4", "Tab 4", show=False),
+        Binding("5", "tab_5", "Tab 5", show=False),
+        Binding("6", "tab_6", "Tab 6", show=False),
+        Binding("7", "tab_7", "Tab 7", show=False),
+        Binding("8", "tab_8", "Tab 8", show=False),
+        Binding("9", "tab_9", "Tab 9", show=False),
+    ]
+
+    def compose(self) -> ComposeResult:
+        portfolio: Portfolio = self.app.portfolio  # type: ignore[attr-defined]
+        with TabbedContent(id="portfolio-tabs"):
+            with TabPane("All", id="tab-all"):
+                yield PortfolioView(portfolio_name=None)
+            for name in portfolio.portfolios:
+                with TabPane(name, id=_safe_id(name)):
+                    yield PortfolioView(portfolio_name=name)
+        yield Footer()
+
+    def _active_view(self) -> PortfolioView | None:
+        tabbed = self.query_one("#portfolio-tabs", TabbedContent)
+        pane = tabbed.active_pane
+        if pane is not None:
+            try:
+                return pane.query_one(PortfolioView)
+            except Exception:
+                return None
+        return None
+
+    def _active_portfolio_name(self) -> str:
+        view = self._active_view()
+        if view is None:
+            return ""
+        return view.portfolio_name or ""
+
+    def _refresh_all_views(self) -> None:
+        for view in self.query(PortfolioView):
+            view.refresh_data()
+
+    def _switch_to_tab(self, index: int) -> None:
+        tabbed = self.query_one("#portfolio-tabs", TabbedContent)
+        panes = list(tabbed.query(TabPane))
+        if 0 <= index < len(panes):
+            tabbed.active = panes[index].id or ""
+
+    def action_tab_1(self) -> None:
+        self._switch_to_tab(0)
+
+    def action_tab_2(self) -> None:
+        self._switch_to_tab(1)
+
+    def action_tab_3(self) -> None:
+        self._switch_to_tab(2)
+
+    def action_tab_4(self) -> None:
+        self._switch_to_tab(3)
+
+    def action_tab_5(self) -> None:
+        self._switch_to_tab(4)
+
+    def action_tab_6(self) -> None:
+        self._switch_to_tab(5)
+
+    def action_tab_7(self) -> None:
+        self._switch_to_tab(6)
+
+    def action_tab_8(self) -> None:
+        self._switch_to_tab(7)
+
+    def action_tab_9(self) -> None:
+        self._switch_to_tab(8)
+
+    def on_screen_resume(self) -> None:
+        self._refresh_all_views()
+
     def action_buy(self) -> None:
-        self.app.push_screen(TransactionModal("buy"), callback=self._on_transaction)
+        pname = self._active_portfolio_name()
+        self.app.push_screen(TransactionModal("buy", portfolio_name=pname), callback=self._on_transaction)
 
     def action_sell(self) -> None:
-        self.app.push_screen(TransactionModal("sell"), callback=self._on_transaction)
+        pname = self._active_portfolio_name()
+        self.app.push_screen(TransactionModal("sell", portfolio_name=pname), callback=self._on_transaction)
 
     def _on_transaction(self, result: dict | None) -> None:
         if result:
             txn = Transaction(**result)
             self.app.portfolio.add_transaction(txn)  # type: ignore[attr-defined]
-            self.refresh_data()
+            self._refresh_all_views()
 
     def action_transactions(self) -> None:
-        self.app.push_screen(TransactionHistoryScreen())
+        pname = self._active_portfolio_name()
+        self.app.push_screen(TransactionHistoryScreen(portfolio_name=pname or None))
 
     def action_import_csv(self) -> None:
-        self.app.push_screen(ImportModal(), callback=self._on_import)
+        pname = self._active_portfolio_name()
+        self.app.push_screen(ImportModal(portfolio_name=pname), callback=self._on_import)
 
     def _on_import(self, result: dict | None) -> None:
         if result and result.get("imported", 0) > 0:
-            self.refresh_data()
+            self._refresh_all_views()
+
+    def action_cycle_sort(self) -> None:
+        view = self._active_view()
+        if view:
+            view.cycle_sort()
+            # Re-render other views too so sort is consistent
+            for v in self.query(PortfolioView):
+                if v is not view and v._rows:
+                    v._render_table()
+
+    def action_cycle_currency(self) -> None:
+        view = self._active_view()
+        if view:
+            view.cycle_currency()
+            # All views need refresh since currency changed globally
+            for v in self.query(PortfolioView):
+                if v is not view:
+                    v.refresh_data()
 
     def action_allocation(self) -> None:
-        self.app.push_screen(AllocationScreen(self._display_currency))
+        portfolio: Portfolio = self.app.portfolio  # type: ignore[attr-defined]
+        pname = self._active_portfolio_name()
+        self.app.push_screen(AllocationScreen(portfolio.display_currency, portfolio_name=pname or None))
+
+    def action_new_portfolio(self) -> None:
+        self.app.push_screen(CreatePortfolioModal(), callback=self._on_new_portfolio)
+
+    def _on_new_portfolio(self, name: str | None) -> None:
+        if not name:
+            return
+        portfolio: Portfolio = self.app.portfolio  # type: ignore[attr-defined]
+        if not portfolio.add_portfolio(name):
+            self.notify(f"Portfolio '{name}' already exists", severity="warning")
+            return
+        tabbed = self.query_one("#portfolio-tabs", TabbedContent)
+        new_pane = TabPane(name, PortfolioView(portfolio_name=name), id=_safe_id(name))
+        tabbed.add_pane(new_pane)
+        tabbed.active = _safe_id(name)
 
 
 class AllocationScreen(Screen):
@@ -331,9 +455,10 @@ class AllocationScreen(Screen):
         Binding("escape", "go_back", "Back"),
     ]
 
-    def __init__(self, display_currency: str = "USD"):
+    def __init__(self, display_currency: str = "USD", portfolio_name: str | None = None):
         super().__init__()
         self._display_currency = display_currency
+        self._portfolio_name = portfolio_name
 
     def compose(self) -> ComposeResult:
         yield Static(
@@ -364,7 +489,7 @@ class AllocationScreen(Screen):
     @work(thread=True)
     def load_data(self) -> None:
         portfolio: Portfolio = self.app.portfolio  # type: ignore[attr-defined]
-        holdings = portfolio.get_holdings()
+        holdings = portfolio.get_holdings(self._portfolio_name)
         if not holdings:
             self.app.call_from_thread(self._show_empty)
             return
@@ -372,11 +497,9 @@ class AllocationScreen(Screen):
         tickers = sorted(holdings.keys())
         prices = get_prices(tickers)
 
-        # Get FX rates
         native_currencies = [prices.get(t, {}).get("currency", "USD") for t in tickers]
         fx_rates = get_exchange_rates(self._display_currency, native_currencies)
 
-        # Compute values in display currency
         rows = []
         for ticker in tickers:
             info = prices.get(ticker, {})
@@ -391,8 +514,6 @@ class AllocationScreen(Screen):
         total_value = sum(r["value"] for r in rows)
         rows.sort(key=lambda r: r["value"], reverse=True)
 
-        # Get ticker info to determine types and fetch ETF holdings for look-through
-        # Try get_etf_holdings for all fund types (ETF, MUTUALFUND, etc.) — not just ETFs
         ticker_types = {}
         etf_holdings_map = {}
         for ticker in tickers:
@@ -404,13 +525,11 @@ class AllocationScreen(Screen):
                 if etf_h:
                     etf_holdings_map[ticker] = etf_h
 
-        # Build look-through: aggregate underlying stock exposure
-        underlying: dict[str, dict] = {}  # symbol -> {name, exposure_pct, sources}
+        underlying: dict[str, dict] = {}
         for r in rows:
             ticker = r["ticker"]
             alloc_pct = (r["value"] / total_value * 100) if total_value > 0 else 0
             if ticker in etf_holdings_map:
-                # ETF: distribute its allocation to underlying stocks
                 for h in etf_holdings_map[ticker]:
                     sym = h["symbol"]
                     effective_pct = alloc_pct * h["weight"] / 100
@@ -424,7 +543,6 @@ class AllocationScreen(Screen):
                             "sources": [ticker],
                         }
             else:
-                # Individual stock: counts as direct exposure
                 sym = ticker
                 if sym in underlying:
                     underlying[sym]["exposure_pct"] += alloc_pct
@@ -436,7 +554,6 @@ class AllocationScreen(Screen):
                         "sources": ["Direct"],
                     }
 
-        # Sort underlying by exposure, take top 10
         top_underlying = sorted(
             underlying.items(), key=lambda x: x[1]["exposure_pct"], reverse=True
         )[:10]
@@ -462,7 +579,6 @@ class AllocationScreen(Screen):
         resolved_tickers = resolved_tickers or set()
         self.query_one("#loading").display = False
 
-        # Update summary
         summary = self.query_one("#allocation-summary", Static)
         n_funds = sum(1 for t in ticker_types.values() if t != "EQUITY")
         n_resolved = len(resolved_tickers)
@@ -475,7 +591,6 @@ class AllocationScreen(Screen):
         )
         summary.display = True
 
-        # Fill allocation table
         alloc_table = self.query_one("#allocation-table", DataTable)
         alloc_table.display = True
         alloc_table.clear()
@@ -494,14 +609,13 @@ class AllocationScreen(Screen):
                 type_label,
             )
 
-        # Fill look-through table
         self.query_one("#lookthrough-title").display = True
         lt_table = self.query_one("#lookthrough-table", DataTable)
         lt_table.display = True
         lt_table.clear()
 
         for i, (sym, data) in enumerate(top_underlying, 1):
-            sources = ", ".join(dict.fromkeys(data["sources"]))  # deduplicate, preserve order
+            sources = ", ".join(dict.fromkeys(data["sources"]))
             lt_table.add_row(
                 str(i),
                 sym,
@@ -532,9 +646,7 @@ class DrillDownScreen(Screen):
             id="drilldown-header",
         )
         yield LoadingIndicator("Fetching data, please wait...", id="loading")
-        # Stock detail (hidden by default, shown for stocks)
         yield StockDetail(id="stock-detail")
-        # ETF holdings table (hidden by default, shown for ETFs)
         yield DataTable(id="etf-holdings-table", cursor_type="row")
         yield EmptyState(id="empty-state")
         yield PriceChart(id="price-chart")
@@ -551,11 +663,9 @@ class DrillDownScreen(Screen):
 
     @work(thread=True)
     def load_data(self) -> None:
-        # Fetch ticker info to determine type
         ticker_info = get_ticker_info(self.ticker)
         quote_type = ticker_info.get("quote_type", "EQUITY")
 
-        # Fetch price history for chart
         history = get_history(self.ticker)
         if history["dates"]:
             self.app.call_from_thread(self._update_chart, history)
@@ -649,6 +759,10 @@ class TransactionHistoryScreen(Screen):
         Binding("escape", "go_back", "Back"),
     ]
 
+    def __init__(self, portfolio_name: str | None = None):
+        super().__init__()
+        self._portfolio_name = portfolio_name
+
     def compose(self) -> ComposeResult:
         yield Static("Transaction History", id="history-header")
         yield DataTable(id="history-table", cursor_type="row")
@@ -657,12 +771,12 @@ class TransactionHistoryScreen(Screen):
 
     def on_mount(self) -> None:
         table = self.query_one("#history-table", DataTable)
-        table.add_columns("Date", "Type", "Ticker", "Shares", "Price", "Total", "Note")
+        table.add_columns("Date", "Type", "Ticker", "Shares", "Price", "Total", "Portfolio", "Note")
         self._load_transactions()
 
     def _load_transactions(self) -> None:
         portfolio: Portfolio = self.app.portfolio  # type: ignore[attr-defined]
-        transactions = portfolio.get_transactions()
+        transactions = portfolio.get_transactions(portfolio_name=self._portfolio_name)
 
         if not transactions:
             self.query_one("#empty-state").display = True
@@ -672,8 +786,9 @@ class TransactionHistoryScreen(Screen):
         self.query_one("#empty-state").display = False
         self.query_one("#history-table").display = True
 
+        label = self._portfolio_name or "All"
         header = self.query_one("#history-header", Static)
-        header.update(f"[bold #5b9bd5]Transaction History[/]    {len(transactions)} total")
+        header.update(f"[bold #5b9bd5]Transaction History[/] — {label}    {len(transactions)} total")
 
         table = self.query_one("#history-table", DataTable)
         table.clear()
@@ -688,6 +803,7 @@ class TransactionHistoryScreen(Screen):
                 Text(f"{t.shares:.2f}", justify="right"),
                 Text(f"{t.price:.2f}", justify="right"),
                 Text(f"{total:,.2f}", justify="right"),
+                t.portfolio or "—",
                 t.note or "",
             )
 
@@ -717,7 +833,9 @@ class PortfolioApp(App):
     def action_refresh(self) -> None:
         clear_cache()
         screen = self.screen
-        if hasattr(screen, "refresh_data"):
+        if hasattr(screen, "_refresh_all_views"):
+            screen._refresh_all_views()
+        elif hasattr(screen, "refresh_data"):
             screen.refresh_data()
         elif hasattr(screen, "load_data"):
             screen.load_data()

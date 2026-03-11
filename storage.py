@@ -17,13 +17,16 @@ class Transaction:
     price: float
     date: str
     note: str = ""
+    portfolio: str = ""  # portfolio tag; empty = untagged
 
 
 class Portfolio:
     def __init__(self, path: Path = DEFAULT_PATH):
         self.path = path
         self.transactions: list[Transaction] = []
+        self.portfolios: list[str] = []
         self.display_currency: str = "USD"
+        self.sort_mode: str = "ticker"
         self.load()
 
     def load(self):
@@ -32,7 +35,9 @@ class Portfolio:
             if text:
                 data = json.loads(text)
                 self.transactions = [Transaction(**t) for t in data.get("transactions", [])]
+                self.portfolios = data.get("portfolios", [])
                 self.display_currency = data.get("display_currency", "USD")
+                self.sort_mode = data.get("sort_mode", "ticker")
             else:
                 self.transactions = []
         else:
@@ -42,6 +47,8 @@ class Portfolio:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "display_currency": self.display_currency,
+            "sort_mode": self.sort_mode,
+            "portfolios": self.portfolios,
             "transactions": [asdict(t) for t in self.transactions],
         }
         self.path.write_text(json.dumps(data, indent=2))
@@ -50,41 +57,65 @@ class Portfolio:
         self.transactions.append(txn)
         self.save()
 
-    def get_holdings(self) -> dict[str, float]:
+    def _filtered_transactions(self, portfolio_name: str | None) -> list[Transaction]:
+        """Return transactions filtered by portfolio tag. None means all."""
+        if portfolio_name is None:
+            return list(self.transactions)
+        return [t for t in self.transactions if t.portfolio == portfolio_name]
+
+    def get_holdings(self, portfolio_name: str | None = None) -> dict[str, float]:
         """Return {ticker: net_shares} for tickers with positive shares."""
         holdings: dict[str, float] = {}
-        for t in self.transactions:
+        for t in self._filtered_transactions(portfolio_name):
             if t.type == "buy":
                 holdings[t.ticker] = holdings.get(t.ticker, 0) + t.shares
             elif t.type == "sell":
                 holdings[t.ticker] = holdings.get(t.ticker, 0) - t.shares
         return {k: v for k, v in holdings.items() if v > 0}
 
-    def get_avg_cost(self, ticker: str) -> float:
+    def get_avg_cost(self, ticker: str, portfolio_name: str | None = None) -> float:
         """Weighted average cost of buy transactions for a ticker."""
         total_shares = 0.0
         total_cost = 0.0
-        for t in self.transactions:
+        for t in self._filtered_transactions(portfolio_name):
             if t.ticker == ticker and t.type == "buy":
                 total_shares += t.shares
                 total_cost += t.shares * t.price
         return total_cost / total_shares if total_shares > 0 else 0.0
 
-    def get_transactions(self, ticker: str | None = None) -> list[Transaction]:
+    def get_transactions(self, ticker: str | None = None, portfolio_name: str | None = None) -> list[Transaction]:
+        txns = self._filtered_transactions(portfolio_name)
         if ticker:
-            return [t for t in self.transactions if t.ticker == ticker]
-        return list(self.transactions)
+            return [t for t in txns if t.ticker == ticker]
+        return txns
 
     def has_transaction(self, txn: Transaction) -> bool:
         """Check if an identical transaction already exists."""
         for t in self.transactions:
             if (t.ticker == txn.ticker and t.type == txn.type
                     and t.shares == txn.shares and t.price == txn.price
-                    and t.date == txn.date):
+                    and t.date == txn.date and t.portfolio == txn.portfolio):
                 return True
         return False
 
-    def import_csv(self, path: Path) -> dict:
+    def add_portfolio(self, name: str) -> bool:
+        """Add a new named portfolio. Returns False if name already exists."""
+        if name in self.portfolios:
+            return False
+        self.portfolios.append(name)
+        self.save()
+        return True
+
+    def remove_portfolio(self, name: str) -> None:
+        """Remove a portfolio name. Transactions with this tag become untagged."""
+        if name in self.portfolios:
+            self.portfolios.remove(name)
+            for t in self.transactions:
+                if t.portfolio == name:
+                    t.portfolio = ""
+            self.save()
+
+    def import_csv(self, path: Path, portfolio_name: str = "") -> dict:
         """Import transactions from a broker CSV file.
 
         Returns dict with keys: imported (int), skipped (int), errors (list[str])
@@ -113,6 +144,7 @@ class Portfolio:
                 txn = parser(row)
                 if txn is None:
                     continue
+                txn.portfolio = portfolio_name
                 if self.has_transaction(txn):
                     skipped += 1
                 else:
