@@ -108,6 +108,38 @@ def get_history(ticker: str, period: str = "3mo") -> dict:
     return result
 
 
+def get_exchange_rate(from_currency: str, to_currency: str) -> float:
+    """Get exchange rate from one currency to another. Returns multiplier."""
+    if from_currency == to_currency:
+        return 1.0
+
+    cached = _get_cached(f"fx:{from_currency}{to_currency}")
+    if cached:
+        return cached.get("rate", 1.0)
+
+    try:
+        pair = f"{from_currency}{to_currency}=X"
+        t = yf.Ticker(pair)
+        rate = t.info.get("regularMarketPrice") or t.info.get("previousClose", 1.0)
+        result = {"rate": float(rate)}
+    except Exception:
+        result = {"rate": 1.0}
+
+    _set_cache(f"fx:{from_currency}{to_currency}", result)
+    return result["rate"]
+
+
+def get_exchange_rates(to_currency: str, from_currencies: list[str]) -> dict[str, float]:
+    """Get exchange rates from multiple currencies to a target currency.
+
+    Returns {from_currency: rate} where rate converts from_currency to to_currency.
+    """
+    rates = {}
+    for fc in set(from_currencies):
+        rates[fc] = get_exchange_rate(fc, to_currency)
+    return rates
+
+
 def get_ticker_info(ticker: str) -> dict:
     """Fetch detailed info for a ticker.
 

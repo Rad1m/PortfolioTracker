@@ -47,6 +47,13 @@ EmptyState {
     color: $text-secondary;
 }
 
+LoadingIndicator {
+    width: 1fr;
+    height: 1fr;
+    content-align: center middle;
+    color: $text-secondary;
+}
+
 DataTable {
     height: 1fr;
 }
@@ -200,6 +207,14 @@ HelpOverlay {
     color: $accent;
 }
 
+/* Big value display */
+#big-value {
+    height: 7;
+    padding: 0 2;
+    content-align: center middle;
+    color: $text-primary;
+}
+
 /* Stock detail */
 #stock-detail {
     height: auto;
@@ -266,6 +281,7 @@ class PortfolioHeader(Static):
         self._pnl_pct = 0.0
         self._last_update = ""
         self._loading = False
+        self._sort_hint = ""
 
     def update_stats(
         self,
@@ -274,28 +290,82 @@ class PortfolioHeader(Static):
         total_pnl_pct: float = 0.0,
         last_update: str = "",
         loading: bool = False,
+        sort_hint: str = "",
     ):
         self._total = total_value
         self._pnl = total_pnl
         self._pnl_pct = total_pnl_pct
         self._last_update = last_update
         self._loading = loading
+        self._sort_hint = sort_hint
         self._render_content()
 
     def _render_content(self):
+        if self._loading and not self._last_update:
+            # First load — no data yet, show minimal header
+            self.update("[bold #5b9bd5]PORTFOLIO TRACKER[/]    [dim]Loading...[/]")
+            return
         pnl_color = "green" if self._pnl >= 0 else "red"
         status = "Refreshing..." if self._loading else f"Last update: {self._last_update}"
+        sort_part = f"  Sort: {self._sort_hint}" if self._sort_hint else ""
         self.update(
             f"[bold #5b9bd5]PORTFOLIO TRACKER[/]    "
             f"Total: [bold]{self._total:,.2f}[/]  "
             f"P&L: [{pnl_color}]{self._pnl:+,.2f} ({self._pnl_pct:+.1f}%)[/]"
-            f"    [dim]{status}[/]"
+            f"    [dim]{status}{sort_part}[/]"
         )
 
 
 class EmptyState(Static):
     """Centered message for empty states."""
     pass
+
+
+class LoadingIndicator(Static):
+    """Centered loading message shown while fetching data."""
+    pass
+
+
+# 5-line tall ASCII digits
+_DIGITS = {
+    "0": ["  ██████  ", " ██    ██ ", " ██    ██ ", " ██    ██ ", "  ██████  "],
+    "1": ["    ██    ", "  ████    ", "    ██    ", "    ██    ", "  ██████  "],
+    "2": ["  ██████  ", " ██    ██ ", "     ██   ", "   ██     ", " ████████ "],
+    "3": ["  ██████  ", "       ██ ", "   █████  ", "       ██ ", "  ██████  "],
+    "4": [" ██    ██ ", " ██    ██ ", " ████████ ", "       ██ ", "       ██ "],
+    "5": [" ████████ ", " ██       ", " ███████  ", "       ██ ", " ███████  "],
+    "6": ["  ██████  ", " ██       ", " ███████  ", " ██    ██ ", "  ██████  "],
+    "7": [" ████████ ", "      ██  ", "     ██   ", "    ██    ", "    ██    "],
+    "8": ["  ██████  ", " ██    ██ ", "  ██████  ", " ██    ██ ", "  ██████  "],
+    "9": ["  ██████  ", " ██    ██ ", "  ███████ ", "       ██ ", "  ██████  "],
+    ",": ["          ", "          ", "          ", "    ██    ", "   ██     "],
+    ".": ["          ", "          ", "          ", "          ", "    ██    "],
+    " ": ["     ", "     ", "     ", "     ", "     "],
+}
+
+
+_CURRENCY_SYMBOLS = {
+    "USD": "$", "GBP": "£", "EUR": "€", "CHF": "CHF ", "JPY": "¥",
+}
+
+
+class BigValue(Static):
+    """Large ASCII art number display for portfolio total."""
+
+    def set_value(self, value: float, currency: str = "USD", pnl_pct: float = 0.0) -> None:
+        formatted = f"{value:,.0f}"
+        lines = [""] * 5
+        for ch in formatted:
+            glyph = _DIGITS.get(ch, _DIGITS[" "])
+            for i in range(5):
+                lines[i] += glyph[i]
+
+        symbol = _CURRENCY_SYMBOLS.get(currency, currency + " ")
+        pnl_color = "green" if pnl_pct >= 0 else "red"
+        pnl_str = f"  [{pnl_color}]{pnl_pct:+.1f}%[/]"
+
+        ascii_block = "\n".join(lines)
+        self.update(f"[dim]{symbol}[/]\n[bold]{ascii_block}[/]{pnl_str}")
 
 
 class PriceChart(PlotextPlot):

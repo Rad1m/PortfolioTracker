@@ -23,6 +23,7 @@ class Portfolio:
     def __init__(self, path: Path = DEFAULT_PATH):
         self.path = path
         self.transactions: list[Transaction] = []
+        self.display_currency: str = "USD"
         self.load()
 
     def load(self):
@@ -31,6 +32,7 @@ class Portfolio:
             if text:
                 data = json.loads(text)
                 self.transactions = [Transaction(**t) for t in data.get("transactions", [])]
+                self.display_currency = data.get("display_currency", "USD")
             else:
                 self.transactions = []
         else:
@@ -38,7 +40,10 @@ class Portfolio:
 
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        data = {"transactions": [asdict(t) for t in self.transactions]}
+        data = {
+            "display_currency": self.display_currency,
+            "transactions": [asdict(t) for t in self.transactions],
+        }
         self.path.write_text(json.dumps(data, indent=2))
 
     def add_transaction(self, txn: Transaction):
