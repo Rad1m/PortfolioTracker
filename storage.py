@@ -1,8 +1,9 @@
 """Portfolio data storage — transactions in JSON, holdings computed."""
 
+import csv
 import json
 from dataclasses import dataclass, asdict
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 DEFAULT_PATH = Path.home() / ".portfolio_tracker" / "portfolio.json"
@@ -26,8 +27,12 @@ class Portfolio:
 
     def load(self):
         if self.path.exists():
-            data = json.loads(self.path.read_text())
-            self.transactions = [Transaction(**t) for t in data.get("transactions", [])]
+            text = self.path.read_text().strip()
+            if text:
+                data = json.loads(text)
+                self.transactions = [Transaction(**t) for t in data.get("transactions", [])]
+            else:
+                self.transactions = []
         else:
             self.transactions = []
 
@@ -64,3 +69,82 @@ class Portfolio:
         if ticker:
             return [t for t in self.transactions if t.ticker == ticker]
         return list(self.transactions)
+
+    def has_transaction(self, txn: Transaction) -> bool:
+        """Check if an identical transaction already exists."""
+        for t in self.transactions:
+            if (t.ticker == txn.ticker and t.type == txn.type
+                    and t.shares == txn.shares and t.price == txn.price
+                    and t.date == txn.date):
+                return True
+        return False
+
+    def import_csv(self, path: Path) -> dict:
+        """Import transactions from a broker CSV file.
+
+        Returns dict with keys: imported (int), skipped (int), errors (list[str])
+        """
+        imported = 0
+        skipped = 0
+        errors: list[str] = []
+
+        try:
+            text = path.read_text(encoding="utf-8-sig")
+        except Exception as e:
+            return {"imported": 0, "skipped": 0, "errors": [f"Cannot read file: {e}"]}
+
+        reader = csv.DictReader(text.splitlines())
+        fields = reader.fieldnames or []
+
+        # Detect format by columns present
+        if "Trade Date" in fields and "Purchase Price" in fields:
+            parser = self._parse_ibkr_row
+        else:
+            return {"imported": 0, "skipped": 0,
+                    "errors": [f"Unrecognised CSV format. Columns: {', '.join(fields)}"]}
+
+        for i, row in enumerate(reader, 2):
+            try:
+                txn = parser(row)
+                if txn is None:
+                    continue
+                if self.has_transaction(txn):
+                    skipped += 1
+                else:
+                    self.transactions.append(txn)
+                    imported += 1
+            except Exception as e:
+                errors.append(f"Row {i}: {e}")
+
+        if imported > 0:
+            self.transactions.sort(key=lambda t: t.date)
+            self.save()
+
+        return {"imported": imported, "skipped": skipped, "errors": errors}
+
+    @staticmethod
+    def _parse_ibkr_row(row: dict) -> Transaction | None:
+        """Parse a row from IBKR/Yahoo Finance portfolio CSV export."""
+        ticker = row.get("Symbol", "").strip()
+        if not ticker:
+            return None
+
+        trade_date_raw = row.get("Trade Date", "").strip()
+        if not trade_date_raw:
+            return None
+
+        date_str = datetime.strptime(trade_date_raw, "%Y%m%d").strftime("%Y-%m-%d")
+        price = float(row.get("Purchase Price", 0))
+        shares = float(row.get("Quantity", 0))
+        if shares <= 0:
+            return None
+
+        comment = row.get("Comment", "").strip()
+        return Transaction(
+            ticker=ticker,
+            type="buy",
+            shares=shares,
+            price=price,
+            date=date_str,
+            note=comment,
+        )

@@ -1,2 +1,3 @@
 yfinance
 textual
+textual-plotext

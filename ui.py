@@ -9,6 +9,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Button, Footer, Input, Label, Static
+from textual_plotext import PlotextPlot
 
 
 APP_CSS = """
@@ -117,6 +118,58 @@ TransactionModal {
     margin-top: 1;
 }
 
+/* Import Modal */
+ImportModal {
+    align: center middle;
+}
+
+#import-dialog {
+    width: 60;
+    height: auto;
+    background: $surface;
+    border: round $accent;
+    padding: 1 2;
+}
+
+#import-dialog #import-title {
+    text-align: center;
+    text-style: bold;
+    color: $accent;
+    margin-bottom: 1;
+}
+
+#import-dialog .field-label {
+    margin-top: 1;
+    color: $text-secondary;
+}
+
+#import-dialog Input {
+    margin-bottom: 0;
+}
+
+#import-result {
+    margin-top: 1;
+    color: $text-primary;
+}
+
+#import-error {
+    color: $negative;
+    text-align: center;
+    height: 1;
+    margin-top: 1;
+}
+
+#import-buttons {
+    margin-top: 1;
+    height: 3;
+    align: center middle;
+}
+
+#import-buttons Button {
+    margin: 0 1;
+    min-width: 12;
+}
+
 /* Help Overlay */
 HelpOverlay {
     align: center middle;
@@ -145,6 +198,30 @@ HelpOverlay {
 #help-dialog .help-section-title {
     text-style: bold;
     color: $accent;
+}
+
+/* Stock detail */
+#stock-detail {
+    height: auto;
+    padding: 1 2;
+    background: $surface;
+    margin: 0 1;
+}
+
+#stock-detail .detail-section-title {
+    text-style: bold;
+    color: $accent;
+    margin-bottom: 1;
+}
+
+#stock-detail .detail-row {
+    color: $text-primary;
+}
+
+/* Price chart */
+#price-chart {
+    height: 15;
+    margin: 0 1;
 }
 
 /* Drill-down header */
@@ -219,6 +296,135 @@ class PortfolioHeader(Static):
 class EmptyState(Static):
     """Centered message for empty states."""
     pass
+
+
+class PriceChart(PlotextPlot):
+    """3-month price chart using plotext."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._dates: list[str] = []
+        self._closes: list[float] = []
+        self._ticker = ""
+
+    def set_data(self, ticker: str, dates: list[str], closes: list[float]) -> None:
+        self._ticker = ticker
+        self._dates = dates
+        self._closes = closes
+        self._draw()
+
+    def on_resize(self) -> None:
+        self._draw()
+
+    def _draw(self) -> None:
+        plt = self.plt
+        plt.clear_figure()
+        plt.canvas_color((30, 30, 30))
+        plt.axes_color((30, 30, 30))
+        plt.ticks_color((128, 128, 128))
+
+        if not self._closes:
+            plt.title("Loading price data...")
+            self.refresh()
+            return
+
+        plt.plot(self._closes, color=(91, 155, 213))
+        plt.title(f"{self._ticker} — 3 Month Price")
+
+        # Show ~6 date labels on x-axis
+        n = len(self._dates)
+        if n > 1:
+            step = max(1, n // 6)
+            tick_indices = list(range(0, n, step))
+            if tick_indices[-1] != n - 1:
+                tick_indices.append(n - 1)
+            # plotext uses 1-based x for sequential plots
+            plt.xticks(
+                [i + 1 for i in tick_indices],
+                [self._dates[i][5:] for i in tick_indices],
+            )
+
+        plt.ylabel("Price")
+        self.refresh()
+
+
+class StockDetail(Static):
+    """Panel showing stock key stats and position summary."""
+
+    def set_data(
+        self,
+        ticker_info: dict,
+        shares: float = 0,
+        avg_cost: float = 0,
+    ) -> None:
+        price = ticker_info.get("price", 0)
+        currency = ticker_info.get("currency", "")
+        value = shares * price
+        cost = shares * avg_cost
+        pnl = value - cost
+        pnl_pct = (pnl / cost * 100) if cost > 0 else 0.0
+        pnl_color = "green" if pnl >= 0 else "red"
+
+        # Position
+        lines = []
+        if shares > 0:
+            lines.append("[bold #5b9bd5]Your Position[/]")
+            lines.append(
+                f"  Shares: [bold]{shares:.2f}[/]    "
+                f"Avg Cost: {avg_cost:.2f}    "
+                f"Value: [bold]{value:,.2f}[/] {currency}"
+            )
+            lines.append(
+                f"  P&L: [{pnl_color}]{pnl:+,.2f} ({pnl_pct:+.1f}%)[/]"
+            )
+            lines.append("")
+
+        # Key stats
+        lines.append("[bold #5b9bd5]Key Stats[/]")
+
+        def _fmt(val, fmt=".2f", suffix=""):
+            if val is None:
+                return "N/A"
+            return f"{val:{fmt}}{suffix}"
+
+        def _fmt_cap(val):
+            if val is None:
+                return "N/A"
+            if val >= 1e12:
+                return f"{val/1e12:.2f}T"
+            if val >= 1e9:
+                return f"{val/1e9:.2f}B"
+            if val >= 1e6:
+                return f"{val/1e6:.1f}M"
+            return f"{val:,.0f}"
+
+        stats = [
+            ("Market Cap", _fmt_cap(ticker_info.get("market_cap"))),
+            ("P/E Ratio", _fmt(ticker_info.get("pe_ratio"))),
+            ("Forward P/E", _fmt(ticker_info.get("forward_pe"))),
+            ("Div Yield", _fmt(ticker_info.get("dividend_yield"), ".2%") if ticker_info.get("dividend_yield") is not None else "N/A"),
+            ("52W High", _fmt(ticker_info.get("high_52w"))),
+            ("52W Low", _fmt(ticker_info.get("low_52w"))),
+            ("Beta", _fmt(ticker_info.get("beta"))),
+        ]
+
+        # Two-column layout
+        mid = (len(stats) + 1) // 2
+        for i in range(mid):
+            left = stats[i]
+            right = stats[i + mid] if i + mid < len(stats) else None
+            line = f"  {left[0]:<14} [bold]{left[1]:>10}[/]"
+            if right:
+                line += f"     {right[0]:<14} [bold]{right[1]:>10}[/]"
+            lines.append(line)
+
+        sector = ticker_info.get("sector")
+        industry = ticker_info.get("industry")
+        if sector or industry:
+            lines.append(f"  {'Sector':<14} [bold]{sector or 'N/A':>10}[/]"
+                         f"     {'Industry':<14} [bold]{(industry or 'N/A')[:20]:>10}[/]")
+
+        self.update("\n".join(lines))
 
 
 class HelpOverlay(ModalScreen):
@@ -334,6 +540,80 @@ class TransactionModal(ModalScreen[dict | None]):
             "date": date_str,
             "note": note,
         })
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
+class ImportModal(ModalScreen[dict | None]):
+    """Modal for importing transactions from a broker CSV file."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="import-dialog"):
+            yield Static("Import CSV", id="import-title")
+            yield Label("File path", classes="field-label")
+            yield Input(placeholder="/path/to/portfolio.csv", id="input-filepath")
+            yield Static("", id="import-error")
+            yield Static("", id="import-result")
+            with Horizontal(id="import-buttons"):
+                yield Button("Import", id="btn-import", variant="primary")
+                yield Button("Cancel", id="btn-import-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-import-cancel":
+            self.dismiss(None)
+        elif event.button.id == "btn-import":
+            self._do_import()
+
+    def _do_import(self):
+        from pathlib import Path
+        error_widget = self.query_one("#import-error", Static)
+        result_widget = self.query_one("#import-result", Static)
+        filepath = self.query_one("#input-filepath", Input).value.strip()
+
+        if not filepath:
+            error_widget.update("[bold]File path is required[/]")
+            return
+
+        path = Path(filepath).expanduser()
+        if not path.exists():
+            error_widget.update(f"[bold]File not found: {path}[/]")
+            return
+
+        if not path.suffix.lower() == ".csv":
+            error_widget.update("[bold]File must be a .csv file[/]")
+            return
+
+        error_widget.update("")
+        from storage import Portfolio
+        portfolio: Portfolio = self.app.portfolio  # type: ignore[attr-defined]
+        result = portfolio.import_csv(path)
+
+        imported = result["imported"]
+        skipped = result["skipped"]
+        errors = result["errors"]
+
+        parts = []
+        if imported:
+            parts.append(f"[#6a9955]{imported} imported[/]")
+        if skipped:
+            parts.append(f"[#d7ba7d]{skipped} duplicates skipped[/]")
+        if errors:
+            parts.append(f"[#d16969]{len(errors)} errors[/]")
+            error_widget.update(f"[bold]{errors[0]}[/]")
+
+        if parts:
+            result_widget.update("  ".join(parts))
+
+        if imported > 0:
+            # Auto-dismiss after successful import
+            self.dismiss({"imported": imported, "skipped": skipped})
+        elif not errors:
+            result_widget.update("[#d7ba7d]Nothing new to import[/]")
 
     def action_cancel(self):
         self.dismiss(None)

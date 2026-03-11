@@ -10,13 +10,16 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Static
 from textual import work
 
-from market import get_etf_holdings, get_prices
+from market import get_etf_holdings, get_history, get_prices, get_ticker_info
 from storage import Portfolio, Transaction
 from ui import (
     APP_CSS,
     EmptyState,
     HelpOverlay,
+    ImportModal,
     PortfolioHeader,
+    PriceChart,
+    StockDetail,
     TransactionModal,
     format_pct,
     format_pnl,
@@ -30,6 +33,7 @@ class PortfolioScreen(Screen):
         Binding("b", "buy", "Buy"),
         Binding("s", "sell", "Sell"),
         Binding("t", "transactions", "History"),
+        Binding("i", "import_csv", "Import CSV"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -39,6 +43,7 @@ class PortfolioScreen(Screen):
             "No holdings yet. Press [bold]b[/] to add your first transaction.",
             id="empty-state",
         )
+        yield PriceChart(id="price-chart")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -68,11 +73,59 @@ class PortfolioScreen(Screen):
         tickers = sorted(holdings.keys())
         prices = get_prices(tickers)
         avg_costs = {t: portfolio.get_avg_cost(t) for t in tickers}
+
+        # Fetch history for all tickers and compute aggregate portfolio value
+        histories = {t: get_history(t) for t in tickers}
+        chart_data = self._compute_portfolio_history(holdings, histories)
+        self.app.call_from_thread(self._update_chart, chart_data)
+
         self.app.call_from_thread(self._update_table, holdings, tickers, avg_costs, prices)
+
+    @staticmethod
+    def _compute_portfolio_history(
+        holdings: dict[str, float],
+        histories: dict[str, dict],
+    ) -> dict:
+        """Aggregate per-ticker history into total portfolio value per day."""
+        # Collect all dates with per-ticker close prices
+        date_values: dict[str, float] = {}
+        all_dates: set[str] = set()
+        ticker_data: dict[str, dict[str, float]] = {}
+
+        for ticker, hist in histories.items():
+            dates = hist.get("dates", [])
+            closes = hist.get("closes", [])
+            if dates and closes:
+                ticker_data[ticker] = dict(zip(dates, closes))
+                all_dates.update(dates)
+
+        if not all_dates:
+            return {"dates": [], "closes": []}
+
+        for d in sorted(all_dates):
+            total = 0.0
+            for ticker, shares in holdings.items():
+                td = ticker_data.get(ticker, {})
+                if d in td:
+                    total += shares * td[d]
+            if total > 0:
+                date_values[d] = total
+
+        sorted_dates = sorted(date_values.keys())
+        return {
+            "dates": sorted_dates,
+            "closes": [date_values[d] for d in sorted_dates],
+        }
+
+    def _update_chart(self, chart_data: dict) -> None:
+        chart = self.query_one("#price-chart", PriceChart)
+        if chart_data["dates"]:
+            chart.set_data("Portfolio", chart_data["dates"], chart_data["closes"])
 
     def _show_empty(self, show: bool) -> None:
         self.query_one("#empty-state").display = show
         self.query_one("#holdings-table").display = not show
+        self.query_one("#price-chart").display = not show
 
     def _update_table(
         self,
@@ -145,9 +198,16 @@ class PortfolioScreen(Screen):
     def action_transactions(self) -> None:
         self.app.push_screen(TransactionHistoryScreen())
 
+    def action_import_csv(self) -> None:
+        self.app.push_screen(ImportModal(), callback=self._on_import)
+
+    def _on_import(self, result: dict | None) -> None:
+        if result and result.get("imported", 0) > 0:
+            self.refresh_data()
+
 
 class DrillDownScreen(Screen):
-    """ETF drill-down — top holdings of a selected ETF."""
+    """Smart drill-down — ETF holdings or stock detail depending on quote type."""
 
     BINDINGS = [
         Binding("escape", "go_back", "Back"),
@@ -163,36 +223,70 @@ class DrillDownScreen(Screen):
             f"[bold #5b9bd5]{self.ticker}[/] — {self.ticker_name}",
             id="drilldown-header",
         )
+        # Stock detail (hidden by default, shown for stocks)
+        yield StockDetail(id="stock-detail")
+        # ETF holdings table (hidden by default, shown for ETFs)
         yield DataTable(id="etf-holdings-table", cursor_type="row")
         yield EmptyState(
-            "Holdings data not available for this ticker.",
+            "Loading...",
             id="empty-state",
         )
+        yield PriceChart(id="price-chart")
         yield Footer()
 
     def on_mount(self) -> None:
         table = self.query_one("#etf-holdings-table", DataTable)
         table.add_columns("#", "Symbol", "Name", "Weight %", "Price", "Day %")
+        self.query_one("#stock-detail").display = False
+        self.query_one("#etf-holdings-table").display = False
         self.query_one("#empty-state").display = False
-        self.load_holdings()
+        self.load_data()
 
     @work(thread=True)
-    def load_holdings(self) -> None:
+    def load_data(self) -> None:
+        # Fetch ticker info to determine type
+        ticker_info = get_ticker_info(self.ticker)
+        quote_type = ticker_info.get("quote_type", "EQUITY")
+
+        # Fetch price history for chart
+        history = get_history(self.ticker)
+        if history["dates"]:
+            self.app.call_from_thread(self._update_chart, history)
+
+        if quote_type == "ETF":
+            self._load_etf(ticker_info)
+        else:
+            self._load_stock(ticker_info)
+
+    def _load_etf(self, ticker_info: dict) -> None:
         etf_holdings = get_etf_holdings(self.ticker)
         if not etf_holdings:
-            self.app.call_from_thread(self._show_empty)
+            self.app.call_from_thread(self._show_etf_empty)
             return
 
         symbols = [h["symbol"] for h in etf_holdings]
         prices = get_prices(symbols)
-        self.app.call_from_thread(self._update_table, etf_holdings, prices)
+        self.app.call_from_thread(self._update_etf_table, etf_holdings, prices)
 
-    def _show_empty(self) -> None:
-        self.query_one("#empty-state").display = True
-        self.query_one("#etf-holdings-table").display = False
+    def _load_stock(self, ticker_info: dict) -> None:
+        portfolio: Portfolio = self.app.portfolio  # type: ignore[attr-defined]
+        holdings = portfolio.get_holdings()
+        shares = holdings.get(self.ticker, 0)
+        avg_cost = portfolio.get_avg_cost(self.ticker)
+        self.app.call_from_thread(self._update_stock_detail, ticker_info, shares, avg_cost)
 
-    def _update_table(self, holdings: list[dict], prices: dict[str, dict]) -> None:
+    def _update_chart(self, history: dict) -> None:
+        chart = self.query_one("#price-chart", PriceChart)
+        chart.set_data(self.ticker, history["dates"], history["closes"])
+
+    def _show_etf_empty(self) -> None:
+        empty = self.query_one("#empty-state", EmptyState)
+        empty.update("Holdings data not available for this ticker.")
+        empty.display = True
+
+    def _update_etf_table(self, holdings: list[dict], prices: dict[str, dict]) -> None:
         table = self.query_one("#etf-holdings-table", DataTable)
+        table.display = True
         table.clear()
 
         total_weight = sum(h["weight"] for h in holdings)
@@ -218,6 +312,19 @@ class DrillDownScreen(Screen):
                 Text(f"{price:.2f}" if price else "N/A", justify="right"),
                 Text(f"{change:+.2f}%", style=chg_color) if price else Text("N/A"),
             )
+
+    def _update_stock_detail(self, ticker_info: dict, shares: float, avg_cost: float) -> None:
+        price = ticker_info.get("price", 0)
+        currency = ticker_info.get("currency", "")
+        header = self.query_one("#drilldown-header", Static)
+        header.update(
+            f"[bold #5b9bd5]{self.ticker}[/] — {self.ticker_name}"
+            f"    Price: [bold]{price:.2f}[/] {currency}"
+        )
+
+        detail = self.query_one("#stock-detail", StockDetail)
+        detail.set_data(ticker_info, shares, avg_cost)
+        detail.display = True
 
     def action_go_back(self) -> None:
         self.app.pop_screen()

@@ -82,6 +82,67 @@ def get_prices(tickers: list[str]) -> dict[str, dict]:
     return results
 
 
+def get_history(ticker: str, period: str = "3mo") -> dict:
+    """Fetch historical price data for a ticker.
+
+    Returns dict with keys: dates (list[str]), closes (list[float])
+    """
+    cached = _get_cached(f"history:{ticker}:{period}")
+    if cached:
+        return cached
+
+    try:
+        t = yf.Ticker(ticker)
+        df = t.history(period=period)
+        if df is None or df.empty:
+            return {"dates": [], "closes": []}
+
+        result = {
+            "dates": [d.strftime("%Y-%m-%d") for d in df.index],
+            "closes": [float(c) for c in df["Close"]],
+        }
+    except Exception:
+        result = {"dates": [], "closes": []}
+
+    _set_cache(f"history:{ticker}:{period}", result)
+    return result
+
+
+def get_ticker_info(ticker: str) -> dict:
+    """Fetch detailed info for a ticker.
+
+    Returns dict with keys: quote_type, market_cap, pe_ratio, forward_pe,
+    dividend_yield, high_52w, low_52w, beta, sector, industry, name, price, currency
+    """
+    cached = _get_cached(f"info:{ticker}")
+    if cached:
+        return cached
+
+    try:
+        t = yf.Ticker(ticker)
+        info = t.info
+        result = {
+            "quote_type": info.get("quoteType", "EQUITY"),
+            "name": info.get("shortName", ticker),
+            "price": info.get("regularMarketPrice") or info.get("previousClose", 0),
+            "currency": info.get("currency", ""),
+            "market_cap": info.get("marketCap"),
+            "pe_ratio": info.get("trailingPE"),
+            "forward_pe": info.get("forwardPE"),
+            "dividend_yield": info.get("dividendYield"),
+            "high_52w": info.get("fiftyTwoWeekHigh"),
+            "low_52w": info.get("fiftyTwoWeekLow"),
+            "beta": info.get("beta"),
+            "sector": info.get("sector"),
+            "industry": info.get("industry"),
+        }
+    except Exception:
+        result = {"quote_type": "EQUITY", "name": ticker, "price": 0, "currency": ""}
+
+    _set_cache(f"info:{ticker}", result)
+    return result
+
+
 def get_etf_holdings(ticker: str) -> list[dict]:
     """Get top holdings for an ETF.
 
