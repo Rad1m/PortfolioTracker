@@ -75,7 +75,7 @@ class PortfolioScreen(Screen):
         self._display_currency = self.app.portfolio.display_currency  # type: ignore[attr-defined]
         self._fx_rates: dict[str, float] = {}
         self.refresh_data()
-        self.set_interval(300, self.refresh_data)
+        self.set_interval(1800, self.refresh_data)
 
     def on_screen_resume(self) -> None:
         self.refresh_data()
