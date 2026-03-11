@@ -10,7 +10,7 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Static
 from textual import work
 
-from market import get_etf_holdings, get_exchange_rates, get_history, get_prices, get_ticker_info
+from market import clear_cache, get_etf_holdings, get_exchange_rates, get_history, get_prices, get_ticker_info
 from storage import Portfolio, Transaction
 from ui import (
     APP_CSS,
@@ -75,7 +75,7 @@ class PortfolioScreen(Screen):
         self._display_currency = self.app.portfolio.display_currency  # type: ignore[attr-defined]
         self._fx_rates: dict[str, float] = {}
         self.refresh_data()
-        self.set_interval(60, self.refresh_data)
+        self.set_interval(300, self.refresh_data)
 
     def on_screen_resume(self) -> None:
         self.refresh_data()
@@ -106,7 +106,13 @@ class PortfolioScreen(Screen):
         chart_data = self._compute_portfolio_history(holdings, histories)
         self.app.call_from_thread(self._update_chart, chart_data)
 
-        self.app.call_from_thread(self._update_table, holdings, tickers, avg_costs, prices, fx_rates)
+        # Compute 3-month change from chart data
+        closes = chart_data.get("closes", [])
+        three_month_pct = ((closes[-1] / closes[0]) - 1) * 100 if len(closes) >= 2 else 0.0
+
+        self.app.call_from_thread(
+            self._update_table, holdings, tickers, avg_costs, prices, fx_rates, three_month_pct,
+        )
 
     @staticmethod
     def _compute_portfolio_history(
@@ -163,19 +169,25 @@ class PortfolioScreen(Screen):
         avg_costs: dict[str, float],
         prices: dict[str, dict],
         fx_rates: dict[str, float],
+        three_month_pct: float = 0.0,
     ) -> None:
         self._prices = prices
         self._fx_rates = fx_rates
+        self._three_month_pct = three_month_pct
         self._show_empty(False)
 
         # Build row data for sorting
         self._rows = []
+        self._day_change_value = 0.0
+        total_value_for_day = 0.0
+
         for ticker in tickers:
             shares = holdings[ticker]
             avg = avg_costs.get(ticker, 0)
             info = prices.get(ticker, {})
             price = info.get("price", 0)
             name = info.get("name", ticker)
+            change_pct = info.get("change_pct", 0) or 0
             native_currency = info.get("currency", "USD")
             fx = fx_rates.get(native_currency, 1.0)
 
@@ -184,11 +196,18 @@ class PortfolioScreen(Screen):
             pnl = value - cost
             pnl_pct = (pnl / cost * 100) if cost > 0 else 0.0
 
+            # Track weighted day change
+            total_value_for_day += value
+            self._day_change_value += value * (change_pct / 100)
+
             self._rows.append({
                 "ticker": ticker, "name": name, "shares": shares,
                 "avg": avg * fx, "price": price * fx, "value": value,
                 "pnl": pnl, "pnl_pct": pnl_pct,
             })
+
+        # Compute day change as % of total
+        self._day_pct = (self._day_change_value / (total_value_for_day - self._day_change_value) * 100) if total_value_for_day > self._day_change_value else 0.0
 
         self._render_table()
 
@@ -242,7 +261,13 @@ class PortfolioScreen(Screen):
         header.update_stats(total_value, total_pnl, total_pnl_pct, now, sort_hint=sort_label)
 
         big = self.query_one("#big-value", BigValue)
-        big.set_value(total_value, currency=self._display_currency, pnl_pct=total_pnl_pct)
+        big.set_value(
+            total_value,
+            currency=self._display_currency,
+            pnl_pct=total_pnl_pct,
+            day_pct=getattr(self, "_day_pct", 0.0),
+            three_month_pct=getattr(self, "_three_month_pct", 0.0),
+        )
 
     def action_cycle_sort(self) -> None:
         """Cycle through sort modes."""
@@ -495,11 +520,12 @@ class PortfolioApp(App):
         self.push_screen(PortfolioScreen())
 
     def action_refresh(self) -> None:
+        clear_cache()
         screen = self.screen
         if hasattr(screen, "refresh_data"):
             screen.refresh_data()
-        elif hasattr(screen, "load_holdings"):
-            screen.load_holdings()
+        elif hasattr(screen, "load_data"):
+            screen.load_data()
 
     def action_help(self) -> None:
         self.push_screen(HelpOverlay())

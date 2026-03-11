@@ -209,7 +209,7 @@ HelpOverlay {
 
 /* Big value display */
 #big-value {
-    height: 7;
+    height: 9;
     padding: 0 2;
     content-align: center middle;
     color: $text-primary;
@@ -352,7 +352,14 @@ _CURRENCY_SYMBOLS = {
 class BigValue(Static):
     """Large ASCII art number display for portfolio total."""
 
-    def set_value(self, value: float, currency: str = "USD", pnl_pct: float = 0.0) -> None:
+    def set_value(
+        self,
+        value: float,
+        currency: str = "USD",
+        pnl_pct: float = 0.0,
+        day_pct: float = 0.0,
+        three_month_pct: float = 0.0,
+    ) -> None:
         formatted = f"{value:,.0f}"
         lines = [""] * 5
         for ch in formatted:
@@ -361,11 +368,18 @@ class BigValue(Static):
                 lines[i] += glyph[i]
 
         symbol = _CURRENCY_SYMBOLS.get(currency, currency + " ")
-        pnl_color = "green" if pnl_pct >= 0 else "red"
-        pnl_str = f"  [{pnl_color}]{pnl_pct:+.1f}%[/]"
+
+        def _color(v: float) -> str:
+            return "green" if v >= 0 else "red"
+
+        stats = (
+            f"  Total P&L: [{_color(pnl_pct)}]{pnl_pct:+.1f}%[/]"
+            f"    Today: [{_color(day_pct)}]{day_pct:+.2f}%[/]"
+            f"    3M: [{_color(three_month_pct)}]{three_month_pct:+.1f}%[/]"
+        )
 
         ascii_block = "\n".join(lines)
-        self.update(f"[dim]{symbol}[/]\n[bold]{ascii_block}[/]{pnl_str}")
+        self.update(f"[dim]{symbol}[/]\n[bold]{ascii_block}[/]\n{stats}")
 
 
 class PriceChart(PlotextPlot):

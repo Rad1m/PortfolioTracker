@@ -5,7 +5,7 @@ import yfinance as yf
 
 # Simple in-memory cache: {ticker: (timestamp, data)}
 _cache: dict[str, tuple[float, dict]] = {}
-CACHE_TTL = 60  # seconds
+CACHE_TTL = 300  # 5 minutes
 
 
 def _get_cached(key: str) -> dict | None:
@@ -18,6 +18,11 @@ def _get_cached(key: str) -> dict | None:
 
 def _set_cache(key: str, data: dict):
     _cache[key] = (time.time(), data)
+
+
+def clear_cache():
+    """Clear all cached data. Used for manual refresh."""
+    _cache.clear()
 
 
 def get_price(ticker: str) -> dict:
