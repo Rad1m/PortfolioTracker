@@ -307,6 +307,7 @@ class PortfolioScreen(Screen):
         Binding("o", "cycle_sort", "Sort"),
         Binding("c", "cycle_currency", "Currency"),
         Binding("a", "allocation", "Allocation"),
+        Binding("m", "move_ticker", "Move Ticker"),
         Binding("n", "new_portfolio", "New Portfolio"),
         Binding("d", "delete_portfolio", "Delete Portfolio"),
         Binding("1", "tab_1", "Tab 1", show=False),
@@ -473,6 +474,36 @@ class PortfolioScreen(Screen):
         tabbed.remove_pane(tab_id)
         # Refresh "All" view since untagged transactions changed
         self._refresh_all_views()
+
+    def action_move_ticker(self) -> None:
+        view = self._active_view()
+        if not view or not view._tickers:
+            return
+        table = view.query_one(".holdings-table", DataTable)
+        row_idx = table.cursor_row
+        if row_idx < 0 or row_idx >= len(view._tickers):
+            return
+        ticker = view._tickers[row_idx]
+        portfolio: Portfolio = self.app.portfolio  # type: ignore[attr-defined]
+        self._move_ticker = ticker
+        self._move_from = view.portfolio_name or ""
+        self.app.push_screen(
+            MoveToPortfolioModal(portfolio.portfolios, current_portfolio=self._move_from),
+            callback=self._on_move_ticker,
+        )
+
+    def _on_move_ticker(self, target: str | None) -> None:
+        if target is None:
+            return
+        from_p = self._move_from
+        if target == from_p:
+            return
+        portfolio: Portfolio = self.app.portfolio  # type: ignore[attr-defined]
+        # from_p="" means "All" tab — pass None to move from any portfolio
+        moved = portfolio.move_ticker(self._move_ticker, None if not from_p else from_p, target)
+        if moved:
+            self.notify(f"Moved {moved} {self._move_ticker} transaction(s) → {target or '(untagged)'}")
+            self._refresh_all_views()
 
 
 class AllocationScreen(Screen):

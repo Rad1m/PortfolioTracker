@@ -71,6 +71,24 @@ class Portfolio:
         txn.portfolio = new_portfolio
         self.save()
 
+    def move_ticker(self, ticker: str, from_portfolio: str | None, to_portfolio: str) -> int:
+        """Move all transactions for a ticker from one portfolio to another.
+
+        from_portfolio=None means move from all portfolios.
+        Returns the number of transactions moved.
+        """
+        moved = 0
+        for t in self.transactions:
+            if t.ticker != ticker:
+                continue
+            if from_portfolio is not None and t.portfolio != from_portfolio:
+                continue
+            t.portfolio = to_portfolio
+            moved += 1
+        if moved:
+            self.save()
+        return moved
+
     def _filtered_transactions(self, portfolio_name: str | None) -> list[Transaction]:
         """Return transactions filtered by portfolio tag. None means all."""
         if portfolio_name is None:
