@@ -109,32 +109,38 @@ QTableWidget QHeaderView::section {{
     padding: 6px 8px;
 }}
 QStatusBar {{
-    background: {C_SURFACE};
+    background: #1a1a1a;
     padding: 0;
     margin: 0;
 }}
 #action-bar {{
-    background: {C_SURFACE};
-    min-height: 36px;
-    max-height: 36px;
+    background: #1a1a1a;
+    min-height: 38px;
+    max-height: 38px;
 }}
 #action-bar QPushButton {{
-    background: #383838;
-    color: #f0f0f0;
-    border: 1px solid #606060;
-    padding: 4px 10px;
+    background: #333333;
+    color: #e8c96a;
+    border: 1px solid #555;
+    border-bottom: none;
+    padding: 6px 14px;
+    margin: 4px 2px 0 2px;
     font-size: 12px;
-    border-radius: 4px;
+    font-weight: bold;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
     min-width: 0;
 }}
 #action-bar QPushButton:hover {{
-    background: #4a4a4a;
-    border: 1px solid #888;
-    color: #ffffff;
+    background: #444444;
+    color: #fff0a0;
+    border-color: #888;
 }}
 #action-bar QPushButton:pressed {{
-    background: #555;
-    border: 1px solid {C_ACCENT};
+    background: #505050;
+    color: #ffffff;
 }}
 QScrollBar:vertical {{
     background: {C_BG};
