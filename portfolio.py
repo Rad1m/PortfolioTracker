@@ -526,21 +526,25 @@ class AllocationScreen(Screen):
         yield LoadingIndicator("Analyzing portfolio holdings...", id="loading")
         yield Static("", id="allocation-summary")
         yield DataTable(id="allocation-table", cursor_type="row")
+        yield Static("", id="allocation-bars")
         yield Static("[bold #5b9bd5]Top 10 Underlying Holdings (Look-Through)[/]", id="lookthrough-title")
         yield DataTable(id="lookthrough-table", cursor_type="row")
+        yield Static("", id="lookthrough-bars")
         yield Footer()
 
     def on_mount(self) -> None:
         alloc_table = self.query_one("#allocation-table", DataTable)
-        alloc_table.add_columns("#", "Ticker", "Name", "Value", "Alloc %", "Type")
+        alloc_table.add_columns("#", "Ticker", "Name", "Value", "Alloc %", "Day %", "Type")
         alloc_table.display = False
 
         lt_table = self.query_one("#lookthrough-table", DataTable)
-        lt_table.add_columns("#", "Stock", "Name", "Exposure %", "Via ETFs")
+        lt_table.add_columns("#", "Stock", "Name", "Exposure %", "Day %", "Via ETFs")
         lt_table.display = False
 
         self.query_one("#allocation-summary").display = False
         self.query_one("#lookthrough-title").display = False
+        self.query_one("#allocation-bars").display = False
+        self.query_one("#lookthrough-bars").display = False
 
         self.load_data()
 
@@ -563,11 +567,12 @@ class AllocationScreen(Screen):
             info = prices.get(ticker, {})
             price = info.get("price", 0)
             name = info.get("name", ticker)
+            change_pct = info.get("change_pct", 0) or 0
             native_currency = info.get("currency", "USD")
             fx = fx_rates.get(native_currency, 1.0)
             shares = holdings[ticker]
             value = shares * price * fx
-            rows.append({"ticker": ticker, "name": name, "value": value, "shares": shares})
+            rows.append({"ticker": ticker, "name": name, "value": value, "shares": shares, "change_pct": change_pct})
 
         total_value = sum(r["value"] for r in rows)
         rows.sort(key=lambda r: r["value"], reverse=True)
@@ -616,6 +621,13 @@ class AllocationScreen(Screen):
             underlying.items(), key=lambda x: x[1]["exposure_pct"], reverse=True
         )[:10]
 
+        # Fetch daily change for underlying tickers
+        underlying_symbols = [sym for sym, _ in top_underlying]
+        underlying_prices = get_prices(underlying_symbols) if underlying_symbols else {}
+        for sym, udata in top_underlying:
+            uinfo = underlying_prices.get(sym, {})
+            udata["change_pct"] = uinfo.get("change_pct", 0) or 0
+
         resolved_tickers = set(etf_holdings_map.keys())
         self.app.call_from_thread(
             self._update_tables, rows, total_value, ticker_types, top_underlying, resolved_tickers,
@@ -625,6 +637,28 @@ class AllocationScreen(Screen):
         self.query_one("#loading").display = False
         self.query_one("#allocation-summary", Static).update("[dim]No holdings to analyze.[/]")
         self.query_one("#allocation-summary").display = True
+
+    @staticmethod
+    def _render_bar_chart(items: list[tuple[str, float, float]], bar_width: int = 30) -> str:
+        """Render a horizontal bar chart.
+
+        items: list of (label, weight, change_pct)
+        Returns rich markup string.
+        """
+        if not items:
+            return ""
+        max_weight = max(w for _, w, _ in items)
+        lines = []
+        for label, weight, change_pct in items:
+            bar_len = int(weight / max_weight * bar_width) if max_weight > 0 else 0
+            bar_len = max(1, bar_len)
+            color = "#6a9955" if change_pct >= 0 else "#d16969"
+            bar = "█" * bar_len
+            pct_str = f"{change_pct:+.2f}%"
+            lines.append(
+                f"  {label:<12} [{color}]{bar}[/] {weight:5.1f}%  [{color}]{pct_str}[/]"
+            )
+        return "\n".join(lines)
 
     def _update_tables(
         self,
@@ -653,34 +687,52 @@ class AllocationScreen(Screen):
         alloc_table.display = True
         alloc_table.clear()
 
+        alloc_bar_items = []
         for i, r in enumerate(rows, 1):
             alloc_pct = (r["value"] / total_value * 100) if total_value > 0 else 0
             qtype = ticker_types.get(r["ticker"], "EQUITY")
             resolved = r["ticker"] in resolved_tickers
             type_label = f"{qtype}" + (" *" if resolved else "")
+            change_pct = r.get("change_pct", 0)
             alloc_table.add_row(
                 str(i),
                 r["ticker"],
                 Text(r["name"][:30]),
                 Text(f"{r['value']:,.0f}", justify="right"),
                 Text(f"{alloc_pct:.1f}%", justify="right"),
+                format_pct(change_pct),
                 type_label,
             )
+            alloc_bar_items.append((r["ticker"], alloc_pct, change_pct))
+
+        # Allocation bar chart
+        alloc_bars = self.query_one("#allocation-bars", Static)
+        alloc_bars.update(self._render_bar_chart(alloc_bar_items))
+        alloc_bars.display = True
 
         self.query_one("#lookthrough-title").display = True
         lt_table = self.query_one("#lookthrough-table", DataTable)
         lt_table.display = True
         lt_table.clear()
 
+        lt_bar_items = []
         for i, (sym, data) in enumerate(top_underlying, 1):
             sources = ", ".join(dict.fromkeys(data["sources"]))
+            change_pct = data.get("change_pct", 0)
             lt_table.add_row(
                 str(i),
                 sym,
                 Text(data["name"][:30]),
                 Text(f"{data['exposure_pct']:.2f}%", justify="right"),
+                format_pct(change_pct),
                 Text(sources[:40]),
             )
+            lt_bar_items.append((sym, data["exposure_pct"], change_pct))
+
+        # Look-through bar chart
+        lt_bars = self.query_one("#lookthrough-bars", Static)
+        lt_bars.update(self._render_bar_chart(lt_bar_items))
+        lt_bars.display = True
 
     def action_go_back(self) -> None:
         self.app.pop_screen()

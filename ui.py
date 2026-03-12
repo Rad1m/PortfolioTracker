@@ -300,8 +300,15 @@ PortfolioView {
 }
 
 #allocation-table {
-    height: 1fr;
-    max-height: 50%;
+    height: auto;
+    max-height: 40%;
+}
+
+#allocation-bars {
+    height: auto;
+    padding: 0 2;
+    color: $text-primary;
+    margin-bottom: 1;
 }
 
 #lookthrough-title {
@@ -312,7 +319,14 @@ PortfolioView {
 }
 
 #lookthrough-table {
-    height: 1fr;
+    height: auto;
+    max-height: 30%;
+}
+
+#lookthrough-bars {
+    height: auto;
+    padding: 0 2;
+    color: $text-primary;
 }
 
 /* Tabbed portfolios */
