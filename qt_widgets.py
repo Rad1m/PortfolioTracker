@@ -134,6 +134,8 @@ class BigValueWidget(QFrame):
 
     def set_value(self, value, currency="USD", pnl_pct=0.0, day_pct=0.0, three_month_pct=0.0):
         symbol = CURRENCY_SYMBOLS.get(currency, currency + " ")
+        color = _pnl_color(day_pct)
+        self._value_label.setStyleSheet(f"color: {color}; font-size: 48px; font-weight: bold;")
         self._value_label.setText(f"{symbol}{value:,.0f}")
 
         def _span(label, v, fmt="+.1f"):
