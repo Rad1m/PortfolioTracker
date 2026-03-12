@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QMainWindow,
-    QPushButton,
     QSizePolicy,
     QStackedWidget,
     QStatusBar,
@@ -109,38 +108,8 @@ QTableWidget QHeaderView::section {{
     padding: 6px 8px;
 }}
 QStatusBar {{
-    background: #1a1a1a;
-    padding: 0;
-    margin: 0;
-}}
-#action-bar {{
-    background: #1a1a1a;
-    min-height: 38px;
-    max-height: 38px;
-}}
-#action-bar QPushButton {{
-    background: #333333;
-    color: #e8c96a;
-    border: 1px solid #555;
-    border-bottom: none;
-    padding: 6px 14px;
-    margin: 4px 2px 0 2px;
-    font-size: 12px;
-    font-weight: bold;
-    border-top-left-radius: 6px;
-    border-top-right-radius: 6px;
-    border-bottom-left-radius: 0;
-    border-bottom-right-radius: 0;
-    min-width: 0;
-}}
-#action-bar QPushButton:hover {{
-    background: #444444;
-    color: #fff0a0;
-    border-color: #888;
-}}
-#action-bar QPushButton:pressed {{
-    background: #505050;
-    color: #ffffff;
+    background: {C_SURFACE};
+    border-top: 1px solid #444;
 }}
 QScrollBar:vertical {{
     background: {C_BG};
@@ -774,14 +743,34 @@ class MainWindow(QMainWindow):
         self._stack.setCurrentIndex(0)
         self._screen_stack = [0]
 
-        # Action bar (clickable buttons at the bottom)
-        self._action_bar = QWidget()
+        # Action bar (tab-styled buttons at the bottom)
+        self._action_bar = QTabWidget()
         self._action_bar.setObjectName("action-bar")
-        self._action_bar_layout = QHBoxLayout(self._action_bar)
-        self._action_bar_layout.setContentsMargins(4, 0, 4, 0)
-        self._action_bar_layout.setSpacing(2)
+        self._action_bar.setFixedHeight(36)
+        self._action_bar.setStyleSheet(f"""
+            #action-bar QTabBar::tab {{
+                background: {C_SURFACE};
+                color: #e8c96a;
+                padding: 8px 14px;
+                margin-right: 2px;
+                border: none;
+                border-bottom: 2px solid transparent;
+                font-weight: bold;
+            }}
+            #action-bar QTabBar::tab:hover {{
+                color: #fff0a0;
+                background: #3a3a3a;
+            }}
+            #action-bar::pane {{
+                border: none;
+                background: {C_SURFACE};
+                max-height: 0;
+            }}
+        """)
+        self._action_bar.tabBarClicked.connect(self._on_action_tab_clicked)
+        self._action_callbacks = []
         self._status = self.statusBar()
-        self._status.setStyleSheet(f"background: {C_SURFACE}; padding: 0; margin: 0;")
+        self._status.setStyleSheet(f"background: {C_SURFACE}; padding: 0; margin: 0; border-top: 1px solid #444;")
         self._status.addPermanentWidget(self._action_bar, 1)
         self._update_status_hints()
 
@@ -912,16 +901,22 @@ class MainWindow(QMainWindow):
             if idx == 0:
                 self._portfolio_page.refresh_all()
 
+    def _on_action_tab_clicked(self, index):
+        if 0 <= index < len(self._action_callbacks):
+            self._action_callbacks[index]()
+        # Deselect the tab so it doesn't stay "active"
+        self._action_bar.tabBar().setCurrentIndex(-1)
+
     def _update_status_hints(self):
-        # Clear existing buttons
-        while self._action_bar_layout.count():
-            item = self._action_bar_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        # Clear existing tabs
+        self._action_bar.blockSignals(True)
+        while self._action_bar.count():
+            self._action_bar.removeTab(0)
+        self._action_callbacks.clear()
 
         idx = self._current_page_index()
         if idx == 0:
-            buttons = [
+            actions = [
                 ("B Buy", self._action_buy),
                 ("S Sell", self._action_sell),
                 ("T History", self._action_history),
@@ -937,7 +932,7 @@ class MainWindow(QMainWindow):
                 ("Q Quit", self.close),
             ]
         elif idx == 2:
-            buttons = [
+            actions = [
                 ("D Delete", self._action_delete),
                 ("M Move", self._action_move),
                 ("Esc Back", self._go_back),
@@ -945,19 +940,18 @@ class MainWindow(QMainWindow):
                 ("Q Quit", self.close),
             ]
         else:
-            buttons = [
+            actions = [
                 ("Esc Back", self._go_back),
                 ("? Help", self._show_help),
                 ("Q Quit", self.close),
             ]
 
-        for label, callback in buttons:
-            btn = QPushButton(label)
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.clicked.connect(callback)
-            self._action_bar_layout.addWidget(btn)
+        for label, callback in actions:
+            self._action_bar.addTab(QWidget(), label)
+            self._action_callbacks.append(callback)
 
-        self._action_bar_layout.addStretch()
+        self._action_bar.tabBar().setCurrentIndex(-1)
+        self._action_bar.blockSignals(False)
 
     # ── Navigation actions ──
 
