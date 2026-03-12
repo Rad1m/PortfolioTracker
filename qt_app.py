@@ -108,8 +108,8 @@ QTableWidget QHeaderView::section {{
     padding: 6px 8px;
 }}
 QStatusBar {{
-    background: {C_SURFACE};
-    color: {C_TEXT_DIM};
+    background: #3a3220;
+    color: #d7ba7d;
     font-size: 12px;
 }}
 QScrollBar:vertical {{
