@@ -16,6 +16,7 @@ from market import clear_cache, get_etf_holdings, get_exchange_rates, get_histor
 from storage import Portfolio, Transaction
 from ui import (
     APP_CSS,
+    ConfirmModal,
     CreatePortfolioModal,
     EmptyState,
     HelpOverlay,
@@ -306,6 +307,7 @@ class PortfolioScreen(Screen):
         Binding("c", "cycle_currency", "Currency"),
         Binding("a", "allocation", "Allocation"),
         Binding("n", "new_portfolio", "New Portfolio"),
+        Binding("d", "delete_portfolio", "Delete Portfolio"),
         Binding("1", "tab_1", "Tab 1", show=False),
         Binding("2", "tab_2", "Tab 2", show=False),
         Binding("3", "tab_3", "Tab 3", show=False),
@@ -446,6 +448,30 @@ class PortfolioScreen(Screen):
         new_pane = TabPane(name, PortfolioView(portfolio_name=name), id=_safe_id(name))
         tabbed.add_pane(new_pane)
         tabbed.active = _safe_id(name)
+
+    def action_delete_portfolio(self) -> None:
+        pname = self._active_portfolio_name()
+        if not pname:
+            self.notify("Cannot delete the 'All' tab", severity="warning")
+            return
+        self.app.push_screen(
+            ConfirmModal(f"Delete portfolio [bold]{pname}[/]?\n\nTransactions will become untagged."),
+            callback=self._on_delete_portfolio,
+        )
+
+    def _on_delete_portfolio(self, confirmed: bool) -> None:
+        if not confirmed:
+            return
+        pname = self._active_portfolio_name()
+        if not pname:
+            return
+        portfolio: Portfolio = self.app.portfolio  # type: ignore[attr-defined]
+        tab_id = _safe_id(pname)
+        portfolio.remove_portfolio(pname)
+        tabbed = self.query_one("#portfolio-tabs", TabbedContent)
+        tabbed.remove_pane(tab_id)
+        # Refresh "All" view since untagged transactions changed
+        self._refresh_all_views()
 
 
 class AllocationScreen(Screen):
@@ -757,11 +783,13 @@ class TransactionHistoryScreen(Screen):
 
     BINDINGS = [
         Binding("escape", "go_back", "Back"),
+        Binding("d", "delete_transaction", "Delete"),
     ]
 
     def __init__(self, portfolio_name: str | None = None):
         super().__init__()
         self._portfolio_name = portfolio_name
+        self._transactions: list[Transaction] = []
 
     def compose(self) -> ComposeResult:
         yield Static("Transaction History", id="history-header")
@@ -777,8 +805,9 @@ class TransactionHistoryScreen(Screen):
     def _load_transactions(self) -> None:
         portfolio: Portfolio = self.app.portfolio  # type: ignore[attr-defined]
         transactions = portfolio.get_transactions(portfolio_name=self._portfolio_name)
+        self._transactions = sorted(transactions, key=lambda x: x.date, reverse=True)
 
-        if not transactions:
+        if not self._transactions:
             self.query_one("#empty-state").display = True
             self.query_one("#history-table").display = False
             return
@@ -788,12 +817,12 @@ class TransactionHistoryScreen(Screen):
 
         label = self._portfolio_name or "All"
         header = self.query_one("#history-header", Static)
-        header.update(f"[bold #5b9bd5]Transaction History[/] — {label}    {len(transactions)} total")
+        header.update(f"[bold #5b9bd5]Transaction History[/] — {label}    {len(self._transactions)} total")
 
         table = self.query_one("#history-table", DataTable)
         table.clear()
 
-        for t in sorted(transactions, key=lambda x: x.date, reverse=True):
+        for t in self._transactions:
             type_color = "green" if t.type == "buy" else "red"
             total = t.shares * t.price
             table.add_row(
@@ -806,6 +835,33 @@ class TransactionHistoryScreen(Screen):
                 t.portfolio or "—",
                 t.note or "",
             )
+
+    def action_delete_transaction(self) -> None:
+        table = self.query_one("#history-table", DataTable)
+        row_idx = table.cursor_row
+        if row_idx < 0 or row_idx >= len(self._transactions):
+            return
+        txn = self._transactions[row_idx]
+        self.app.push_screen(
+            ConfirmModal(
+                f"Delete transaction?\n\n"
+                f"  {txn.type.upper()} {txn.shares:.2f} x {txn.ticker} @ {txn.price:.2f}\n"
+                f"  Date: {txn.date}"
+            ),
+            callback=self._on_delete_confirmed,
+        )
+
+    def _on_delete_confirmed(self, confirmed: bool) -> None:
+        if not confirmed:
+            return
+        table = self.query_one("#history-table", DataTable)
+        row_idx = table.cursor_row
+        if row_idx < 0 or row_idx >= len(self._transactions):
+            return
+        txn = self._transactions[row_idx]
+        portfolio: Portfolio = self.app.portfolio  # type: ignore[attr-defined]
+        portfolio.delete_transaction(txn)
+        self._load_transactions()
 
     def action_go_back(self) -> None:
         self.app.pop_screen()

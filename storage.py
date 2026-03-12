@@ -57,6 +57,15 @@ class Portfolio:
         self.transactions.append(txn)
         self.save()
 
+    def delete_transaction(self, txn: Transaction) -> bool:
+        """Delete a transaction by identity. Returns True if found and removed."""
+        for i, t in enumerate(self.transactions):
+            if t is txn:
+                self.transactions.pop(i)
+                self.save()
+                return True
+        return False
+
     def _filtered_transactions(self, portfolio_name: str | None) -> list[Transaction]:
         """Return transactions filtered by portfolio tag. None means all."""
         if portfolio_name is None:

@@ -621,12 +621,14 @@ class HelpOverlay(ModalScreen):
                 "  t   Transactions a  Allocation\n"
                 "  o   Sort        c  Currency\n"
                 "  i   Import CSV  n  New Portfolio\n"
+                "  d   Delete portfolio\n"
                 "  1-9 Switch portfolio tabs",
                 classes="help-section",
             )
             yield Static(
                 "[bold #5b9bd5]Drill-Down / History[/]\n"
-                "  Esc  Back    ↑↓  Scroll",
+                "  Esc  Back    ↑↓  Scroll\n"
+                "  d    Delete transaction (History)",
                 classes="help-section",
             )
             yield Static(
@@ -801,6 +803,40 @@ class ImportModal(ModalScreen[dict | None]):
 
     def action_cancel(self):
         self.dismiss(None)
+
+
+class ConfirmModal(ModalScreen[bool]):
+    """Yes/No confirmation dialog."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("y", "confirm", "Yes"),
+        Binding("n", "cancel", "No"),
+    ]
+
+    def __init__(self, message: str):
+        super().__init__()
+        self._message = message
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-dialog"):
+            yield Static("Confirm", id="modal-title")
+            yield Static(self._message, classes="field-label")
+            with Horizontal(id="modal-buttons"):
+                yield Button("Yes", id="btn-confirm", variant="primary")
+                yield Button("No", id="btn-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-confirm":
+            self.dismiss(True)
+        else:
+            self.dismiss(False)
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
 
 
 class CreatePortfolioModal(ModalScreen[str | None]):
