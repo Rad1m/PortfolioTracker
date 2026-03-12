@@ -113,7 +113,11 @@ class PortfolioView(Vertical):
         fx_rates = get_exchange_rates(self._display_currency, native_currencies)
 
         histories = {t: get_history(t) for t in tickers}
-        chart_data = self._compute_portfolio_history(holdings, histories)
+        ticker_fx = {
+            t: fx_rates.get(prices.get(t, {}).get("currency", "USD"), 1.0)
+            for t in tickers
+        }
+        chart_data = self._compute_portfolio_history(holdings, histories, ticker_fx)
         self.app.call_from_thread(self._update_chart, chart_data)
 
         closes = chart_data.get("closes", [])
@@ -127,6 +131,7 @@ class PortfolioView(Vertical):
     def _compute_portfolio_history(
         holdings: dict[str, float],
         histories: dict[str, dict],
+        ticker_fx: dict[str, float] | None = None,
     ) -> dict:
         date_values: dict[str, float] = {}
         all_dates: set[str] = set()
@@ -147,7 +152,8 @@ class PortfolioView(Vertical):
             for ticker, shares in holdings.items():
                 td = ticker_data.get(ticker, {})
                 if d in td:
-                    total += shares * td[d]
+                    fx = ticker_fx.get(ticker, 1.0) if ticker_fx else 1.0
+                    total += shares * td[d] * fx
             if total > 0:
                 date_values[d] = total
 

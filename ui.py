@@ -504,7 +504,8 @@ class BigValue(Static):
         )
 
         ascii_block = "\n".join(lines)
-        self.update(f"[dim]{symbol}[/]\n[bold]{ascii_block}[/]\n{stats}")
+        value_color = _color(day_pct)
+        self.update(f"[dim]{symbol}[/]\n[bold {value_color}]{ascii_block}[/]\n{stats}")
 
 
 class PriceChart(PlotextPlot):

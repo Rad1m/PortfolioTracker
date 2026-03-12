@@ -47,7 +47,11 @@ def _fetch_holdings_data(portfolio: Portfolio, portfolio_name: str | None, displ
     fx_rates = get_exchange_rates(display_currency, native_currencies)
 
     histories = {t: get_history(t) for t in tickers}
-    chart_data = _compute_portfolio_history(holdings, histories)
+    ticker_fx = {
+        t: fx_rates.get(prices.get(t, {}).get("currency", "USD"), 1.0)
+        for t in tickers
+    }
+    chart_data = _compute_portfolio_history(holdings, histories, ticker_fx)
 
     closes = chart_data.get("closes", [])
     three_month_pct = ((closes[-1] / closes[0]) - 1) * 100 if len(closes) >= 2 else 0.0
@@ -94,7 +98,7 @@ def _fetch_holdings_data(portfolio: Portfolio, portfolio_name: str | None, displ
     }
 
 
-def _compute_portfolio_history(holdings, histories):
+def _compute_portfolio_history(holdings, histories, ticker_fx=None):
     """Compute aggregated portfolio value over time."""
     all_dates = set()
     ticker_data = {}
@@ -115,7 +119,8 @@ def _compute_portfolio_history(holdings, histories):
         for ticker, shares in holdings.items():
             td = ticker_data.get(ticker, {})
             if d in td:
-                total += shares * td[d]
+                fx = ticker_fx.get(ticker, 1.0) if ticker_fx else 1.0
+                total += shares * td[d] * fx
         if total > 0:
             date_values[d] = total
 
