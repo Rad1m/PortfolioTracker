@@ -468,3 +468,190 @@ class StockDetailWidget(QFrame):
             )
 
         self._content.setText("<pre>" + "\n".join(lines) + "</pre>")
+
+
+class TreemapWidget(QWidget):
+    """Treemap (tiles chart) sized by weight, colored red/green by daily change."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._items = []  # list of {"label": str, "weight": float, "change_pct": float}
+        self.setMinimumHeight(150)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+    def set_data(self, items: list[dict]):
+        """Set treemap data. Each item: {label, weight, change_pct}."""
+        self._items = sorted(items, key=lambda x: x["weight"], reverse=True)
+        self.update()
+
+    @staticmethod
+    def _squarify(values, x, y, w, h):
+        """Squarified treemap layout. Returns list of (x, y, w, h, index)."""
+        if not values:
+            return []
+
+        total = sum(v for v, _ in values)
+        if total <= 0:
+            return []
+
+        rects = []
+        TreemapWidget._layout_strip(values, x, y, w, h, total, rects)
+        return rects
+
+    @staticmethod
+    def _layout_strip(values, x, y, w, h, total, rects):
+        if not values or total <= 0:
+            return
+
+        if len(values) == 1:
+            rects.append((x, y, w, h, values[0][1]))
+            return
+
+        # Decide split direction: horizontal if wider, vertical if taller
+        horizontal = w >= h
+
+        # Find best split point using squarify heuristic
+        best_split = 1
+        best_ratio = float("inf")
+        running = 0
+        for i in range(len(values)):
+            running += values[i][0]
+            frac = running / total
+            if horizontal:
+                strip_w = w * frac
+                if strip_w <= 0:
+                    continue
+                # Worst aspect ratio in this strip
+                worst = 0
+                strip_running = 0
+                for j in range(i + 1):
+                    strip_running += values[j][0]
+                    item_h = h * (values[j][0] / running) if running > 0 else 0
+                    if item_h > 0 and strip_w > 0:
+                        ratio = max(strip_w / item_h, item_h / strip_w)
+                        worst = max(worst, ratio)
+                if worst < best_ratio:
+                    best_ratio = worst
+                    best_split = i + 1
+                elif worst > best_ratio * 1.5 and i > 0:
+                    break
+            else:
+                strip_h = h * frac
+                if strip_h <= 0:
+                    continue
+                worst = 0
+                strip_running = 0
+                for j in range(i + 1):
+                    strip_running += values[j][0]
+                    item_w = w * (values[j][0] / running) if running > 0 else 0
+                    if item_w > 0 and strip_h > 0:
+                        ratio = max(strip_h / item_w, item_w / strip_h)
+                        worst = max(worst, ratio)
+                if worst < best_ratio:
+                    best_ratio = worst
+                    best_split = i + 1
+                elif worst > best_ratio * 1.5 and i > 0:
+                    break
+
+        # Layout the strip
+        strip = values[:best_split]
+        rest = values[best_split:]
+        strip_total = sum(v for v, _ in strip)
+        strip_frac = strip_total / total if total > 0 else 0
+
+        if horizontal:
+            strip_w = w * strip_frac
+            cy = y
+            for val, idx in strip:
+                item_h = h * (val / strip_total) if strip_total > 0 else 0
+                rects.append((x, cy, strip_w, item_h, idx))
+                cy += item_h
+            if rest:
+                remaining_total = total - strip_total
+                TreemapWidget._layout_strip(rest, x + strip_w, y, w - strip_w, h, remaining_total, rects)
+        else:
+            strip_h = h * strip_frac
+            cx = x
+            for val, idx in strip:
+                item_w = w * (val / strip_total) if strip_total > 0 else 0
+                rects.append((cx, y, item_w, strip_h, idx))
+                cx += item_w
+            if rest:
+                remaining_total = total - strip_total
+                TreemapWidget._layout_strip(rest, x, y + strip_h, w, h - strip_h, remaining_total, rects)
+
+    def paintEvent(self, event):
+        from PySide6.QtGui import QPainter, QPen
+
+        if not self._items:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+
+        w = self.width()
+        h = self.height()
+
+        values = [(item["weight"], i) for i, item in enumerate(self._items) if item["weight"] > 0]
+        rects = self._squarify(values, 0, 0, w, h)
+
+        for rx, ry, rw, rh, idx in rects:
+            if rw < 1 or rh < 1:
+                continue
+
+            item = self._items[idx]
+            change = item.get("change_pct", 0)
+
+            # Color intensity based on magnitude of change
+            intensity = min(abs(change) / 3.0, 1.0)  # cap at ±3%
+            if change >= 0:
+                # Green shades: dark green -> bright green
+                r_c = int(30 + (10 - 30) * intensity)
+                g_c = int(60 + (160 - 60) * intensity)
+                b_c = int(30 + (10 - 30) * intensity)
+            else:
+                # Red shades: dark red -> bright red
+                r_c = int(60 + (180 - 60) * intensity)
+                g_c = int(30 + (10 - 30) * intensity)
+                b_c = int(30 + (10 - 30) * intensity)
+
+            bg = QColor(r_c, g_c, b_c)
+            painter.fillRect(int(rx), int(ry), int(rw), int(rh), bg)
+
+            # Border
+            painter.setPen(QPen(QColor("#000000"), 1))
+            painter.drawRect(int(rx), int(ry), int(rw), int(rh))
+
+            # Text — only if tile is big enough
+            painter.setPen(QColor("#ffffff"))
+            label = item["label"]
+            change_str = f"{change:+.2f}%"
+
+            if rw > 50 and rh > 30:
+                # Ticker name — bold, larger
+                font = QFont("Helvetica Neue", max(8, min(16, int(rw / len(label)))) if label else 10)
+                font.setBold(True)
+                painter.setFont(font)
+                painter.drawText(
+                    int(rx + 4), int(ry + 4), int(rw - 8), int(rh / 2),
+                    Qt.AlignLeft | Qt.AlignVCenter, label,
+                )
+                # Change % below
+                font.setBold(False)
+                font.setPointSize(max(7, font.pointSize() - 2))
+                painter.setFont(font)
+                painter.drawText(
+                    int(rx + 4), int(ry + rh / 2), int(rw - 8), int(rh / 2 - 4),
+                    Qt.AlignLeft | Qt.AlignTop, change_str,
+                )
+            elif rw > 30 and rh > 16:
+                # Just ticker
+                font = QFont("Helvetica Neue", max(7, min(11, int(rw / max(len(label), 1)))))
+                font.setBold(True)
+                painter.setFont(font)
+                painter.drawText(
+                    int(rx + 2), int(ry + 2), int(rw - 4), int(rh - 4),
+                    Qt.AlignCenter, label,
+                )
+
+        painter.end()

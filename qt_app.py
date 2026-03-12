@@ -9,11 +9,13 @@ from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QMainWindow,
     QSizePolicy,
+    QSplitter,
     QStackedWidget,
     QStatusBar,
     QTableWidget,
@@ -51,6 +53,7 @@ from qt_widgets import (
     HoldingsPanel,
     PriceChartWidget,
     StockDetailWidget,
+    TreemapWidget,
     _left_aligned_item,
     _pnl_color,
     _right_aligned_item,
@@ -565,13 +568,13 @@ class TransactionHistoryPage(QWidget):
 
 
 class AllocationPage(QWidget):
-    """Allocation breakdown and look-through underlying holdings."""
+    """Allocation breakdown with treemaps — 2x2 grid layout."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
         self._header = QLabel("Portfolio Allocation & Top Holdings")
         self._header.setFixedHeight(40)
@@ -580,20 +583,35 @@ class AllocationPage(QWidget):
             f"font-weight: bold; padding: 0 12px;"
         )
         self._header.setAlignment(Qt.AlignVCenter)
-        layout.addWidget(self._header)
+        outer.addWidget(self._header)
 
         self._loading = QLabel("Analyzing portfolio holdings...")
         self._loading.setAlignment(Qt.AlignCenter)
         self._loading.setStyleSheet(f"color: {C_TEXT_DIM}; font-size: 14px; padding: 40px;")
-        layout.addWidget(self._loading)
+        outer.addWidget(self._loading)
 
         self._summary = QLabel("")
         self._summary.setFixedHeight(30)
         self._summary.setStyleSheet(f"color: {C_TEXT}; padding: 0 12px;")
         self._summary.setVisible(False)
-        layout.addWidget(self._summary)
+        outer.addWidget(self._summary)
 
-        # Allocation table
+        # 2x2 grid: tables on left, treemaps on right
+        self._grid = QSplitter(Qt.Vertical)
+        self._grid.setVisible(False)
+        outer.addWidget(self._grid, stretch=1)
+
+        # ── Top row: allocation table + treemap ──
+        top_splitter = QSplitter(Qt.Horizontal)
+
+        top_left = QWidget()
+        top_left_layout = QVBoxLayout(top_left)
+        top_left_layout.setContentsMargins(0, 0, 0, 0)
+        top_left_layout.setSpacing(0)
+        alloc_title = QLabel("  Holdings Allocation")
+        alloc_title.setFixedHeight(24)
+        alloc_title.setStyleSheet(f"color: {C_ACCENT}; font-weight: bold; font-size: 12px;")
+        top_left_layout.addWidget(alloc_title)
         self._alloc_table = QTableWidget()
         self._alloc_table.setColumnCount(6)
         self._alloc_table.setHorizontalHeaderLabels(["#", "Ticker", "Name", "Value", "Alloc %", "Type"])
@@ -601,19 +619,35 @@ class AllocationPage(QWidget):
         self._alloc_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._alloc_table.verticalHeader().setVisible(False)
         self._alloc_table.horizontalHeader().setStretchLastSection(True)
-        self._alloc_table.setVisible(False)
-        layout.addWidget(self._alloc_table, stretch=1)
+        top_left_layout.addWidget(self._alloc_table)
+        top_splitter.addWidget(top_left)
 
-        # Look-through title
-        self._lt_title = QLabel("Top 10 Underlying Holdings (Look-Through)")
-        self._lt_title.setFixedHeight(30)
-        self._lt_title.setStyleSheet(
-            f"color: {C_ACCENT}; font-weight: bold; padding: 0 12px;"
-        )
-        self._lt_title.setVisible(False)
-        layout.addWidget(self._lt_title)
+        top_right = QWidget()
+        top_right_layout = QVBoxLayout(top_right)
+        top_right_layout.setContentsMargins(0, 0, 0, 0)
+        top_right_layout.setSpacing(0)
+        treemap_title = QLabel("  Allocation Treemap")
+        treemap_title.setFixedHeight(24)
+        treemap_title.setStyleSheet(f"color: {C_ACCENT}; font-weight: bold; font-size: 12px;")
+        top_right_layout.addWidget(treemap_title)
+        self._alloc_treemap = TreemapWidget()
+        top_right_layout.addWidget(self._alloc_treemap)
+        top_splitter.addWidget(top_right)
 
-        # Look-through table
+        top_splitter.setSizes([500, 500])
+        self._grid.addWidget(top_splitter)
+
+        # ── Bottom row: look-through table + treemap ──
+        bot_splitter = QSplitter(Qt.Horizontal)
+
+        bot_left = QWidget()
+        bot_left_layout = QVBoxLayout(bot_left)
+        bot_left_layout.setContentsMargins(0, 0, 0, 0)
+        bot_left_layout.setSpacing(0)
+        lt_title = QLabel("  Top 10 Underlying Holdings (Look-Through)")
+        lt_title.setFixedHeight(24)
+        lt_title.setStyleSheet(f"color: {C_ACCENT}; font-weight: bold; font-size: 12px;")
+        bot_left_layout.addWidget(lt_title)
         self._lt_table = QTableWidget()
         self._lt_table.setColumnCount(5)
         self._lt_table.setHorizontalHeaderLabels(["#", "Stock", "Name", "Exposure %", "Via ETFs"])
@@ -621,17 +655,30 @@ class AllocationPage(QWidget):
         self._lt_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._lt_table.verticalHeader().setVisible(False)
         self._lt_table.horizontalHeader().setStretchLastSection(True)
-        self._lt_table.setVisible(False)
-        layout.addWidget(self._lt_table, stretch=1)
+        bot_left_layout.addWidget(self._lt_table)
+        bot_splitter.addWidget(bot_left)
+
+        bot_right = QWidget()
+        bot_right_layout = QVBoxLayout(bot_right)
+        bot_right_layout.setContentsMargins(0, 0, 0, 0)
+        bot_right_layout.setSpacing(0)
+        lt_treemap_title = QLabel("  Top 10 Treemap")
+        lt_treemap_title.setFixedHeight(24)
+        lt_treemap_title.setStyleSheet(f"color: {C_ACCENT}; font-weight: bold; font-size: 12px;")
+        bot_right_layout.addWidget(lt_treemap_title)
+        self._lt_treemap = TreemapWidget()
+        bot_right_layout.addWidget(self._lt_treemap)
+        bot_splitter.addWidget(bot_right)
+
+        bot_splitter.setSizes([500, 500])
+        self._grid.addWidget(bot_splitter)
 
         self._worker = None
 
     def load(self, portfolio, portfolio_name=None):
         self._loading.setVisible(True)
         self._summary.setVisible(False)
-        self._alloc_table.setVisible(False)
-        self._lt_title.setVisible(False)
-        self._lt_table.setVisible(False)
+        self._grid.setVisible(False)
 
         self._worker = MarketWorker(
             _fetch_allocation_data, portfolio, portfolio_name, portfolio.display_currency
@@ -665,15 +712,17 @@ class AllocationPage(QWidget):
             f"Total: {total_value:,.0f} {display_currency}"
         )
         self._summary.setVisible(True)
+        self._grid.setVisible(True)
 
-        # Allocation table
-        self._alloc_table.setVisible(True)
+        # ── Allocation table ──
         self._alloc_table.setRowCount(len(rows))
+        alloc_treemap_items = []
         for i, r in enumerate(rows):
             alloc_pct = (r["value"] / total_value * 100) if total_value > 0 else 0
             qtype = ticker_types.get(r["ticker"], "EQUITY")
             resolved = r["ticker"] in resolved_tickers
             type_label = f"{qtype}" + (" *" if resolved else "")
+            change_pct = r.get("change_pct", 0)
 
             self._alloc_table.setItem(i, 0, _left_aligned_item(str(i + 1)))
             self._alloc_table.setItem(i, 1, _left_aligned_item(r["ticker"]))
@@ -682,27 +731,43 @@ class AllocationPage(QWidget):
             self._alloc_table.setItem(i, 4, _right_aligned_item(f"{alloc_pct:.1f}%"))
             self._alloc_table.setItem(i, 5, _left_aligned_item(type_label))
 
+            alloc_treemap_items.append({
+                "label": r["ticker"],
+                "weight": r["value"],
+                "change_pct": change_pct,
+            })
+
         header = self._alloc_table.horizontalHeader()
         for col in range(5):
             header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(5, QHeaderView.Stretch)
 
-        # Look-through table
-        self._lt_title.setVisible(True)
-        self._lt_table.setVisible(True)
+        self._alloc_treemap.set_data(alloc_treemap_items)
+
+        # ── Look-through table + treemap ──
         self._lt_table.setRowCount(len(top_underlying))
+        lt_treemap_items = []
         for i, (sym, udata) in enumerate(top_underlying):
             sources = ", ".join(dict.fromkeys(udata["sources"]))
+            change_pct = udata.get("change_pct", 0)
             self._lt_table.setItem(i, 0, _left_aligned_item(str(i + 1)))
             self._lt_table.setItem(i, 1, _left_aligned_item(sym))
             self._lt_table.setItem(i, 2, _left_aligned_item(udata["name"][:30]))
             self._lt_table.setItem(i, 3, _right_aligned_item(f"{udata['exposure_pct']:.2f}%"))
             self._lt_table.setItem(i, 4, _left_aligned_item(sources[:40]))
 
+            lt_treemap_items.append({
+                "label": sym,
+                "weight": udata["exposure_pct"],
+                "change_pct": change_pct,
+            })
+
         lt_header = self._lt_table.horizontalHeader()
         for col in range(4):
             lt_header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         lt_header.setSectionResizeMode(4, QHeaderView.Stretch)
+
+        self._lt_treemap.set_data(lt_treemap_items)
 
 
 # ── MainWindow ─────────────────────────────────────────────────────────

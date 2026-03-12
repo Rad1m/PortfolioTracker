@@ -176,7 +176,8 @@ def _fetch_allocation_data(portfolio: Portfolio, portfolio_name: str | None, dis
         fx = fx_rates.get(native_currency, 1.0)
         shares = holdings[ticker]
         value = shares * price * fx
-        rows.append({"ticker": ticker, "name": name, "value": value})
+        change_pct = info.get("change_pct", 0) or 0
+        rows.append({"ticker": ticker, "name": name, "value": value, "change_pct": change_pct})
 
     total_value = sum(r["value"] for r in rows)
     rows.sort(key=lambda r: r["value"], reverse=True)
@@ -225,6 +226,13 @@ def _fetch_allocation_data(portfolio: Portfolio, portfolio_name: str | None, dis
     top_underlying = sorted(
         underlying.items(), key=lambda x: x[1]["exposure_pct"], reverse=True
     )[:10]
+
+    # Fetch prices for underlying tickers to get daily change
+    underlying_symbols = [sym for sym, _ in top_underlying]
+    underlying_prices = get_prices(underlying_symbols) if underlying_symbols else {}
+    for sym, udata in top_underlying:
+        uinfo = underlying_prices.get(sym, {})
+        udata["change_pct"] = uinfo.get("change_pct", 0) or 0
 
     return {
         "empty": False,
