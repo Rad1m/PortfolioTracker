@@ -347,7 +347,10 @@ class DrillDownPage(QWidget):
         self._stock_detail.setVisible(False)
         layout.addWidget(self._stock_detail)
 
-        # ETF holdings table
+        # ETF holdings: table + treemap side by side
+        self._etf_splitter = QSplitter(Qt.Horizontal)
+        self._etf_splitter.setVisible(False)
+
         self._etf_table = QTableWidget()
         self._etf_table.setColumnCount(6)
         self._etf_table.setHorizontalHeaderLabels(["#", "Symbol", "Name", "Weight %", "Price", "Day %"])
@@ -355,8 +358,13 @@ class DrillDownPage(QWidget):
         self._etf_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._etf_table.verticalHeader().setVisible(False)
         self._etf_table.horizontalHeader().setStretchLastSection(True)
-        self._etf_table.setVisible(False)
-        layout.addWidget(self._etf_table, stretch=1)
+        self._etf_splitter.addWidget(self._etf_table)
+
+        self._etf_treemap = TreemapWidget()
+        self._etf_splitter.addWidget(self._etf_treemap)
+
+        self._etf_splitter.setSizes([500, 500])
+        layout.addWidget(self._etf_splitter, stretch=1)
 
         # Empty label
         self._empty = QLabel("Holdings data not available for this ticker.")
@@ -377,7 +385,7 @@ class DrillDownPage(QWidget):
         self._header.setText(f"{ticker} — {name}")
         self._loading.setVisible(True)
         self._stock_detail.setVisible(False)
-        self._etf_table.setVisible(False)
+        self._etf_splitter.setVisible(False)
         self._empty.setVisible(False)
         self._chart.setVisible(False)
 
@@ -415,8 +423,9 @@ class DrillDownPage(QWidget):
             )
 
             etf_prices = data.get("etf_prices", {})
-            self._etf_table.setVisible(True)
+            self._etf_splitter.setVisible(True)
             self._etf_table.setRowCount(len(etf_holdings))
+            treemap_items = []
             for i, h in enumerate(etf_holdings):
                 symbol = h["symbol"]
                 info = etf_prices.get(symbol, {})
@@ -432,10 +441,18 @@ class DrillDownPage(QWidget):
                 self._etf_table.setItem(i, 4, _right_aligned_item(f"{hp:.2f}" if hp else "N/A"))
                 self._etf_table.setItem(i, 5, _right_aligned_item(f"{change:+.2f}%", chg_col))
 
+                treemap_items.append({
+                    "label": symbol,
+                    "weight": h["weight"],
+                    "change_pct": change,
+                })
+
             header = self._etf_table.horizontalHeader()
             for col in range(5):
                 header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
             header.setSectionResizeMode(5, QHeaderView.Stretch)
+
+            self._etf_treemap.set_data(treemap_items)
         else:
             # Stock detail
             self._header.setText(

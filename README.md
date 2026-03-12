@@ -38,3 +38,7 @@ Transactions are saved to `~/.portfolio_tracker/portfolio.json`. Holdings and P&
 
 - [Architecture](docs/ARCHITECTURE.md) — module structure, data flow, design decisions
 - [UX Design](docs/UX.md) — screens, navigation, color palette, layout specs
+
+## Author
+
+[Radim Simanek](https://www.linkedin.com/in/radim-simanek/)
