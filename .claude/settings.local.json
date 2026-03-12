@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /Users/radim/Programming/PortfolioTracker log --oneline)",
+      "Bash(python3 -c \"import yfinance; print\\(yfinance.__version__\\)\" 2>&1 || echo \"yfinance not installed\")",
+      "Bash(python3 -c \"import rich; print\\(rich.__version__\\)\" 2>&1 || echo \"rich not installed\")",
+      "WebFetch(domain:ranaroussi.github.io)",
+      "WebFetch(domain:pypi.org)",
+      "WebFetch(domain:github.com)",
+      "Bash(pip install:*)",
+      "Bash(python -c \"from storage import Portfolio, Transaction; from market import get_price; from ui import console; print\\('All imports OK'\\)\")",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(gh issue:*)"
+    ]
+  }
+}

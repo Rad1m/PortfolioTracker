@@ -27,6 +27,7 @@ from ui import (
     PortfolioHeader,
     PriceChart,
     StockDetail,
+    Treemap,
     TransactionModal,
     format_pct,
     format_pnl,
@@ -531,16 +532,16 @@ class AllocationScreen(Screen):
         )
         yield LoadingIndicator("Analyzing portfolio holdings...", id="loading")
         yield Static("", id="allocation-summary")
-        # Top row: allocation table + bar chart
+        # Top row: allocation table + treemap
         with Horizontal(id="alloc-row"):
             yield DataTable(id="allocation-table", cursor_type="row")
-            yield Static("", id="allocation-bars")
-        # Bottom row: look-through table + bar chart
+            yield Treemap(id="allocation-treemap")
+        # Bottom row: look-through table + treemap
         with Horizontal(id="lt-row"):
             with Vertical(id="lt-left"):
                 yield Static("[bold #5b9bd5]Top 10 Underlying (Look-Through)[/]", id="lookthrough-title")
                 yield DataTable(id="lookthrough-table", cursor_type="row")
-            yield Static("", id="lookthrough-bars")
+            yield Treemap(id="lookthrough-treemap")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -646,28 +647,6 @@ class AllocationScreen(Screen):
         self.query_one("#allocation-summary", Static).update("[dim]No holdings to analyze.[/]")
         self.query_one("#allocation-summary").display = True
 
-    @staticmethod
-    def _render_bar_chart(items: list[tuple[str, float, float]], bar_width: int = 30) -> str:
-        """Render a horizontal bar chart.
-
-        items: list of (label, weight, change_pct)
-        Returns rich markup string.
-        """
-        if not items:
-            return ""
-        max_weight = max(w for _, w, _ in items)
-        lines = []
-        for label, weight, change_pct in items:
-            bar_len = int(weight / max_weight * bar_width) if max_weight > 0 else 0
-            bar_len = max(1, bar_len)
-            color = "#6a9955" if change_pct >= 0 else "#d16969"
-            bar = "█" * bar_len
-            pct_str = f"{change_pct:+.2f}%"
-            lines.append(
-                f"  {label:<12} [{color}]{bar}[/] {weight:5.1f}%  [{color}]{pct_str}[/]"
-            )
-        return "\n".join(lines)
-
     def _update_tables(
         self,
         rows: list[dict],
@@ -711,11 +690,11 @@ class AllocationScreen(Screen):
                 format_pct(change_pct),
                 type_label,
             )
-            alloc_bar_items.append((r["ticker"], alloc_pct, change_pct))
+            alloc_bar_items.append({"label": r["ticker"], "weight": alloc_pct, "change_pct": change_pct})
 
-        # Allocation bar chart
-        alloc_bars = self.query_one("#allocation-bars", Static)
-        alloc_bars.update(self._render_bar_chart(alloc_bar_items))
+        # Allocation treemap
+        alloc_treemap = self.query_one("#allocation-treemap", Treemap)
+        alloc_treemap.set_data(alloc_bar_items)
 
         self.query_one("#lt-row").display = True
         lt_table = self.query_one("#lookthrough-table", DataTable)
@@ -733,11 +712,11 @@ class AllocationScreen(Screen):
                 format_pct(change_pct),
                 Text(sources[:40]),
             )
-            lt_bar_items.append((sym, data["exposure_pct"], change_pct))
+            lt_bar_items.append({"label": sym, "weight": data["exposure_pct"], "change_pct": change_pct})
 
-        # Look-through bar chart
-        lt_bars = self.query_one("#lookthrough-bars", Static)
-        lt_bars.update(self._render_bar_chart(lt_bar_items))
+        # Look-through treemap
+        lt_treemap = self.query_one("#lookthrough-treemap", Treemap)
+        lt_treemap.set_data(lt_bar_items)
 
     def action_go_back(self) -> None:
         self.app.pop_screen()
@@ -764,7 +743,7 @@ class DrillDownScreen(Screen):
         yield StockDetail(id="stock-detail")
         with Horizontal(id="etf-row"):
             yield DataTable(id="etf-holdings-table", cursor_type="row")
-            yield Static("", id="etf-bars")
+            yield Treemap(id="etf-treemap")
         yield EmptyState(id="empty-state")
         yield PriceChart(id="price-chart")
         yield Footer()
@@ -821,24 +800,6 @@ class DrillDownScreen(Screen):
         empty.update("Holdings data not available for this ticker.")
         empty.display = True
 
-    @staticmethod
-    def _render_bar_chart(items: list[tuple[str, float, float]], bar_width: int = 30) -> str:
-        """Render a horizontal bar chart. items: list of (label, weight, change_pct)."""
-        if not items:
-            return ""
-        max_weight = max(w for _, w, _ in items)
-        lines = []
-        for label, weight, change_pct in items:
-            bar_len = int(weight / max_weight * bar_width) if max_weight > 0 else 0
-            bar_len = max(1, bar_len)
-            color = "#6a9955" if change_pct >= 0 else "#d16969"
-            bar = "█" * bar_len
-            pct_str = f"{change_pct:+.2f}%"
-            lines.append(
-                f"  {label:<12} [{color}]{bar}[/] {weight:5.1f}%  [{color}]{pct_str}[/]"
-            )
-        return "\n".join(lines)
-
     def _update_etf_table(self, holdings: list[dict], prices: dict[str, dict]) -> None:
         self.query_one("#loading").display = False
         self.query_one("#etf-row").display = True
@@ -869,10 +830,10 @@ class DrillDownScreen(Screen):
                 Text(f"{price:.2f}" if price else "N/A", justify="right"),
                 Text(f"{change:+.2f}%", style=chg_color) if price else Text("N/A"),
             )
-            bar_items.append((symbol, h["weight"], change))
+            bar_items.append({"label": symbol, "weight": h["weight"], "change_pct": change})
 
-        etf_bars = self.query_one("#etf-bars", Static)
-        etf_bars.update(self._render_bar_chart(bar_items))
+        etf_treemap = self.query_one("#etf-treemap", Treemap)
+        etf_treemap.set_data(bar_items)
 
     def _update_stock_detail(self, ticker_info: dict, shares: float, avg_cost: float) -> None:
         self.query_one("#loading").display = False

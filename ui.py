@@ -2,6 +2,7 @@
 
 from datetime import date
 
+from rich.console import Group
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -266,10 +267,9 @@ PortfolioView {
     width: 1fr;
 }
 
-#etf-bars {
+#etf-treemap {
     width: 1fr;
-    padding: 1 2;
-    color: $text-primary;
+    min-height: 8;
 }
 
 /* Price chart */
@@ -322,10 +322,19 @@ PortfolioView {
     width: 1fr;
 }
 
-#allocation-bars {
+#allocation-treemap {
     width: 1fr;
-    padding: 1 2;
-    color: $text-primary;
+    min-height: 8;
+}
+
+#lookthrough-treemap {
+    width: 1fr;
+    min-height: 8;
+}
+
+#etf-treemap {
+    width: 1fr;
+    min-height: 8;
 }
 
 #lt-row {
@@ -347,11 +356,6 @@ PortfolioView {
     height: 1fr;
 }
 
-#lookthrough-bars {
-    width: 1fr;
-    padding: 1 2;
-    color: $text-primary;
-}
 
 /* Tabbed portfolios */
 TabbedContent {
@@ -556,6 +560,208 @@ class PriceChart(PlotextPlot):
 
         plt.ylabel("Price")
         self.refresh()
+
+
+def _treemap_bg(change_pct: float) -> str:
+    """Map daily change % to a background color string for Rich."""
+    intensity = min(abs(change_pct) / 3.0, 1.0)
+    if change_pct >= 0:
+        r = int(30 + (10 - 30) * intensity)
+        g = int(60 + (160 - 60) * intensity)
+        b = int(30 + (10 - 30) * intensity)
+    else:
+        r = int(60 + (180 - 60) * intensity)
+        g = int(30 + (10 - 30) * intensity)
+        b = int(30 + (10 - 30) * intensity)
+    return f"rgb({r},{g},{b})"
+
+
+class Treemap(Widget):
+    """Terminal treemap — tiles sized by weight, colored by daily change."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._items: list[dict] = []
+
+    def set_data(self, items: list[dict]) -> None:
+        """Set treemap data. Each item: {label, weight, change_pct}."""
+        self._items = sorted(items, key=lambda x: x["weight"], reverse=True)
+        self.refresh()
+
+    def render(self):
+        w = self.size.width
+        h = self.size.height
+        if not self._items or w <= 0 or h <= 0:
+            return Text("")
+
+        values = [(item["weight"], i) for i, item in enumerate(self._items) if item["weight"] > 0]
+        if not values:
+            return Text("")
+
+        rects = _squarify(values, 0, 0, w, h)
+
+        # Build grid: cell -> item index
+        grid = [[-1] * w for _ in range(h)]
+        for rx, ry, rw, rh, idx in rects:
+            x0, y0 = int(round(rx)), int(round(ry))
+            x1, y1 = int(round(rx + rw)), int(round(ry + rh))
+            x1 = min(x1, w)
+            y1 = min(y1, h)
+            for cy in range(y0, y1):
+                for cx in range(x0, x1):
+                    grid[cy][cx] = idx
+
+        # Find bounding box per tile for label placement
+        tile_bounds: dict[int, list[int]] = {}
+        for ry in range(h):
+            for rx in range(w):
+                idx = grid[ry][rx]
+                if idx >= 0:
+                    if idx not in tile_bounds:
+                        tile_bounds[idx] = [rx, ry, rx, ry]
+                    else:
+                        b = tile_bounds[idx]
+                        if rx > b[2]:
+                            b[2] = rx
+                        if ry > b[3]:
+                            b[3] = ry
+
+        # Prepare label lines per tile: list of (row, start_x, text)
+        tile_labels: dict[int, list[tuple[int, int, str]]] = {}
+        for idx, (x0, y0, x2, y2) in tile_bounds.items():
+            item = self._items[idx]
+            tw = x2 - x0 + 1
+            th = y2 - y0 + 1
+            mid_y = (y0 + y2) // 2
+            label_lines: list[tuple[int, int, str]] = []
+
+            if tw >= 4:
+                label = item["label"][: tw - 2]
+                sx = x0 + (tw - len(label)) // 2
+                row = mid_y if th >= 2 else y0
+                label_lines.append((row, sx, label))
+
+            if tw >= 6 and th >= 3:
+                pct = f"{item.get('change_pct', 0):+.1f}%"[: tw - 2]
+                sx = x0 + (tw - len(pct)) // 2
+                label_lines.append((mid_y + 1, sx, pct))
+
+            tile_labels[idx] = label_lines
+
+        # Render each row as a Rich Text line
+        lines: list[Text] = []
+        for ry in range(h):
+            line = Text()
+            rx = 0
+            while rx < w:
+                idx = grid[ry][rx]
+                end = rx + 1
+                while end < w and grid[ry][end] == idx:
+                    end += 1
+
+                if idx >= 0:
+                    bg = _treemap_bg(self._items[idx].get("change_pct", 0))
+                    chars = list(" " * (end - rx))
+                    for lrow, lsx, ltxt in tile_labels.get(idx, []):
+                        if ry == lrow:
+                            for ci, ch in enumerate(ltxt):
+                                pos = lsx + ci - rx
+                                if 0 <= pos < len(chars):
+                                    chars[pos] = ch
+                    # Border: darken the rightmost column of each tile
+                    if end < w and grid[ry][end] != idx and len(chars) > 0:
+                        chars[-1] = "│"
+                    line.append("".join(chars), style=f"bold white on {bg}")
+                else:
+                    line.append(" " * (end - rx))
+
+                rx = end
+            lines.append(line)
+
+        return Group(*lines)
+
+
+def _squarify(values, x, y, w, h):
+    """Squarified treemap layout. Returns list of (x, y, w, h, index)."""
+    if not values:
+        return []
+    total = sum(v for v, _ in values)
+    if total <= 0:
+        return []
+    rects: list[tuple] = []
+    _layout_strip(values, x, y, w, h, total, rects)
+    return rects
+
+
+def _layout_strip(values, x, y, w, h, total, rects):
+    if not values or total <= 0:
+        return
+    if len(values) == 1:
+        rects.append((x, y, w, h, values[0][1]))
+        return
+
+    horizontal = w >= h
+    best_split = 1
+    best_ratio = float("inf")
+    running = 0
+
+    for i in range(len(values)):
+        running += values[i][0]
+        frac = running / total
+        if horizontal:
+            strip_w = w * frac
+            if strip_w <= 0:
+                continue
+            worst = 0
+            for j in range(i + 1):
+                item_h = h * (values[j][0] / running) if running > 0 else 0
+                if item_h > 0 and strip_w > 0:
+                    ratio = max(strip_w / item_h, item_h / strip_w)
+                    worst = max(worst, ratio)
+            if worst < best_ratio:
+                best_ratio = worst
+                best_split = i + 1
+            elif worst > best_ratio * 1.5 and i > 0:
+                break
+        else:
+            strip_h = h * frac
+            if strip_h <= 0:
+                continue
+            worst = 0
+            for j in range(i + 1):
+                item_w = w * (values[j][0] / running) if running > 0 else 0
+                if item_w > 0 and strip_h > 0:
+                    ratio = max(strip_h / item_w, item_w / strip_h)
+                    worst = max(worst, ratio)
+            if worst < best_ratio:
+                best_ratio = worst
+                best_split = i + 1
+            elif worst > best_ratio * 1.5 and i > 0:
+                break
+
+    strip = values[:best_split]
+    rest = values[best_split:]
+    strip_total = sum(v for v, _ in strip)
+    strip_frac = strip_total / total if total > 0 else 0
+
+    if horizontal:
+        strip_w = w * strip_frac
+        cy = y
+        for val, idx in strip:
+            item_h = h * (val / strip_total) if strip_total > 0 else 0
+            rects.append((x, cy, strip_w, item_h, idx))
+            cy += item_h
+        if rest:
+            _layout_strip(rest, x + strip_w, y, w - strip_w, h, total - strip_total, rects)
+    else:
+        strip_h = h * strip_frac
+        cx = x
+        for val, idx in strip:
+            item_w = w * (val / strip_total) if strip_total > 0 else 0
+            rects.append((cx, y, item_w, strip_h, idx))
+            cx += item_w
+        if rest:
+            _layout_strip(rest, x, y + strip_h, w, h - strip_h, total - strip_total, rects)
 
 
 class StockDetail(Static):
