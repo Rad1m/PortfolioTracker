@@ -7,7 +7,7 @@ from datetime import datetime
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Static, TabbedContent, TabPane
 from textual import work
@@ -525,26 +525,28 @@ class AllocationScreen(Screen):
         )
         yield LoadingIndicator("Analyzing portfolio holdings...", id="loading")
         yield Static("", id="allocation-summary")
-        yield DataTable(id="allocation-table", cursor_type="row")
-        yield Static("", id="allocation-bars")
-        yield Static("[bold #5b9bd5]Top 10 Underlying Holdings (Look-Through)[/]", id="lookthrough-title")
-        yield DataTable(id="lookthrough-table", cursor_type="row")
-        yield Static("", id="lookthrough-bars")
+        # Top row: allocation table + bar chart
+        with Horizontal(id="alloc-row"):
+            yield DataTable(id="allocation-table", cursor_type="row")
+            yield Static("", id="allocation-bars")
+        # Bottom row: look-through table + bar chart
+        with Horizontal(id="lt-row"):
+            with Vertical(id="lt-left"):
+                yield Static("[bold #5b9bd5]Top 10 Underlying (Look-Through)[/]", id="lookthrough-title")
+                yield DataTable(id="lookthrough-table", cursor_type="row")
+            yield Static("", id="lookthrough-bars")
         yield Footer()
 
     def on_mount(self) -> None:
         alloc_table = self.query_one("#allocation-table", DataTable)
         alloc_table.add_columns("#", "Ticker", "Name", "Value", "Alloc %", "Day %", "Type")
-        alloc_table.display = False
 
         lt_table = self.query_one("#lookthrough-table", DataTable)
         lt_table.add_columns("#", "Stock", "Name", "Exposure %", "Day %", "Via ETFs")
-        lt_table.display = False
 
         self.query_one("#allocation-summary").display = False
-        self.query_one("#lookthrough-title").display = False
-        self.query_one("#allocation-bars").display = False
-        self.query_one("#lookthrough-bars").display = False
+        self.query_one("#alloc-row").display = False
+        self.query_one("#lt-row").display = False
 
         self.load_data()
 
@@ -682,9 +684,9 @@ class AllocationScreen(Screen):
             f"Total: [bold]{total_value:,.0f}[/] {self._display_currency}"
         )
         summary.display = True
+        self.query_one("#alloc-row").display = True
 
         alloc_table = self.query_one("#allocation-table", DataTable)
-        alloc_table.display = True
         alloc_table.clear()
 
         alloc_bar_items = []
@@ -708,11 +710,9 @@ class AllocationScreen(Screen):
         # Allocation bar chart
         alloc_bars = self.query_one("#allocation-bars", Static)
         alloc_bars.update(self._render_bar_chart(alloc_bar_items))
-        alloc_bars.display = True
 
-        self.query_one("#lookthrough-title").display = True
+        self.query_one("#lt-row").display = True
         lt_table = self.query_one("#lookthrough-table", DataTable)
-        lt_table.display = True
         lt_table.clear()
 
         lt_bar_items = []
@@ -732,7 +732,6 @@ class AllocationScreen(Screen):
         # Look-through bar chart
         lt_bars = self.query_one("#lookthrough-bars", Static)
         lt_bars.update(self._render_bar_chart(lt_bar_items))
-        lt_bars.display = True
 
     def action_go_back(self) -> None:
         self.app.pop_screen()

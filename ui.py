@@ -299,16 +299,26 @@ PortfolioView {
     color: $text-primary;
 }
 
+#alloc-row {
+    height: 1fr;
+}
+
 #allocation-table {
-    height: auto;
-    max-height: 40%;
+    width: 1fr;
 }
 
 #allocation-bars {
-    height: auto;
-    padding: 0 2;
+    width: 1fr;
+    padding: 1 2;
     color: $text-primary;
-    margin-bottom: 1;
+}
+
+#lt-row {
+    height: 1fr;
+}
+
+#lt-left {
+    width: 1fr;
 }
 
 #lookthrough-title {
@@ -319,13 +329,12 @@ PortfolioView {
 }
 
 #lookthrough-table {
-    height: auto;
-    max-height: 30%;
+    height: 1fr;
 }
 
 #lookthrough-bars {
-    height: auto;
-    padding: 0 2;
+    width: 1fr;
+    padding: 1 2;
     color: $text-primary;
 }
 
