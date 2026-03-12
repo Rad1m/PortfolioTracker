@@ -5,7 +5,7 @@ import sys
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut
+from PySide6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -1169,8 +1169,55 @@ class MainWindow(QMainWindow):
 # ── Entry point ────────────────────────────────────────────────────────
 
 
+def _set_macos_dock_name(name: str):
+    """Set the macOS dock app name (requires pyobjc, graceful no-op otherwise)."""
+    try:
+        from Foundation import NSBundle
+        bundle = NSBundle.mainBundle()
+        info = bundle.infoDictionary()
+        info["CFBundleName"] = name
+    except Exception:
+        pass
+
+
+def _create_app_icon() -> QIcon:
+    """Create a simple chart icon programmatically."""
+    px = QPixmap(128, 128)
+    px.fill(QColor("#1e1e1e"))
+    p = QPainter(px)
+    p.setRenderHint(QPainter.Antialiasing)
+    # Draw a mini chart line
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QPen, QPainterPath
+    pen = QPen(QColor("#5b9bd5"), 5)
+    p.setPen(pen)
+    points = [QPointF(12, 90), QPointF(35, 70), QPointF(55, 80),
+              QPointF(75, 40), QPointF(95, 50), QPointF(116, 20)]
+    path = QPainterPath(points[0])
+    for pt in points[1:]:
+        path.lineTo(pt)
+    p.drawPath(path)
+    # Fill under the line
+    fill_path = QPainterPath(path)
+    fill_path.lineTo(116, 116)
+    fill_path.lineTo(12, 116)
+    fill_path.closeSubpath()
+    p.fillPath(fill_path, QColor(91, 155, 213, 60))
+    # Border
+    p.setPen(QPen(QColor("#5b9bd5"), 3))
+    p.drawRoundedRect(2, 2, 124, 124, 16, 16)
+    p.end()
+    return QIcon(px)
+
+
 def main():
+    if sys.platform == "darwin":
+        _set_macos_dock_name("Portfolio Tracker")
+
     app = QApplication(sys.argv)
+    app.setApplicationName("Portfolio Tracker")
+    app.setApplicationDisplayName("Portfolio Tracker")
+    app.setWindowIcon(_create_app_icon())
     app.setStyleSheet(DARK_STYLESHEET)
     window = MainWindow()
     window.show()
