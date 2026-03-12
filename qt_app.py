@@ -109,34 +109,32 @@ QTableWidget QHeaderView::section {{
     padding: 6px 8px;
 }}
 QStatusBar {{
-    background: #3a3220;
-    color: #d7ba7d;
-    font-size: 12px;
+    background: {C_SURFACE};
+    padding: 0;
+    margin: 0;
 }}
 #action-bar {{
-    background: #3a3220;
-    min-height: 32px;
-    max-height: 32px;
+    background: {C_SURFACE};
+    min-height: 36px;
+    max-height: 36px;
 }}
 #action-bar QPushButton {{
-    background: transparent;
-    color: #d7ba7d;
-    border: none;
+    background: #383838;
+    color: #f0f0f0;
+    border: 1px solid #606060;
     padding: 4px 10px;
     font-size: 12px;
+    border-radius: 4px;
     min-width: 0;
 }}
 #action-bar QPushButton:hover {{
-    background: #4a4230;
-    color: #f0d898;
-    border-radius: 3px;
+    background: #4a4a4a;
+    border: 1px solid #888;
+    color: #ffffff;
 }}
 #action-bar QPushButton:pressed {{
-    background: #5a5240;
-}}
-#action-bar .action-key {{
-    color: #f0d898;
-    font-weight: bold;
+    background: #555;
+    border: 1px solid {C_ACCENT};
 }}
 QScrollBar:vertical {{
     background: {C_BG};
@@ -777,7 +775,7 @@ class MainWindow(QMainWindow):
         self._action_bar_layout.setContentsMargins(4, 0, 4, 0)
         self._action_bar_layout.setSpacing(2)
         self._status = self.statusBar()
-        self._status.setStyleSheet("background: #3a3220; padding: 0; margin: 0;")
+        self._status.setStyleSheet(f"background: {C_SURFACE}; padding: 0; margin: 0;")
         self._status.addPermanentWidget(self._action_bar, 1)
         self._update_status_hints()
 
