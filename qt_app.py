@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QMainWindow,
+    QPushButton,
     QSizePolicy,
     QStackedWidget,
     QStatusBar,
@@ -111,6 +112,31 @@ QStatusBar {{
     background: #3a3220;
     color: #d7ba7d;
     font-size: 12px;
+}}
+#action-bar {{
+    background: #3a3220;
+    min-height: 32px;
+    max-height: 32px;
+}}
+#action-bar QPushButton {{
+    background: transparent;
+    color: #d7ba7d;
+    border: none;
+    padding: 4px 10px;
+    font-size: 12px;
+    min-width: 0;
+}}
+#action-bar QPushButton:hover {{
+    background: #4a4230;
+    color: #f0d898;
+    border-radius: 3px;
+}}
+#action-bar QPushButton:pressed {{
+    background: #5a5240;
+}}
+#action-bar .action-key {{
+    color: #f0d898;
+    font-weight: bold;
 }}
 QScrollBar:vertical {{
     background: {C_BG};
@@ -744,9 +770,15 @@ class MainWindow(QMainWindow):
         self._stack.setCurrentIndex(0)
         self._screen_stack = [0]
 
-        # Status bar
-        self._status = QStatusBar()
-        self.setStatusBar(self._status)
+        # Action bar (clickable buttons at the bottom)
+        self._action_bar = QWidget()
+        self._action_bar.setObjectName("action-bar")
+        self._action_bar_layout = QHBoxLayout(self._action_bar)
+        self._action_bar_layout.setContentsMargins(4, 0, 4, 0)
+        self._action_bar_layout.setSpacing(2)
+        self._status = self.statusBar()
+        self._status.setStyleSheet("background: #3a3220; padding: 0; margin: 0;")
+        self._status.addPermanentWidget(self._action_bar, 1)
         self._update_status_hints()
 
         # Shortcuts
@@ -877,16 +909,51 @@ class MainWindow(QMainWindow):
                 self._portfolio_page.refresh_all()
 
     def _update_status_hints(self):
+        # Clear existing buttons
+        while self._action_bar_layout.count():
+            item = self._action_bar_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
         idx = self._current_page_index()
         if idx == 0:
-            self._status.showMessage(
-                "B Buy  S Sell  T History  A Alloc  O Sort  C Currency  "
-                "I Import  N New  D Del  M Move  Enter Drill  ? Help  Q Quit"
-            )
+            buttons = [
+                ("B Buy", self._action_buy),
+                ("S Sell", self._action_sell),
+                ("T History", self._action_history),
+                ("A Alloc", self._action_allocation),
+                ("O Sort", self._action_sort),
+                ("C Currency", self._action_currency),
+                ("I Import", self._action_import),
+                ("N New", self._action_new_portfolio),
+                ("D Del", self._action_delete),
+                ("M Move", self._action_move),
+                ("R Refresh", self._do_refresh),
+                ("? Help", self._show_help),
+                ("Q Quit", self.close),
+            ]
         elif idx == 2:
-            self._status.showMessage("D Delete  M Move  Esc Back  ? Help  Q Quit")
+            buttons = [
+                ("D Delete", self._action_delete),
+                ("M Move", self._action_move),
+                ("Esc Back", self._go_back),
+                ("? Help", self._show_help),
+                ("Q Quit", self.close),
+            ]
         else:
-            self._status.showMessage("Esc Back  ? Help  Q Quit")
+            buttons = [
+                ("Esc Back", self._go_back),
+                ("? Help", self._show_help),
+                ("Q Quit", self.close),
+            ]
+
+        for label, callback in buttons:
+            btn = QPushButton(label)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(callback)
+            self._action_bar_layout.addWidget(btn)
+
+        self._action_bar_layout.addStretch()
 
     # ── Navigation actions ──
 
