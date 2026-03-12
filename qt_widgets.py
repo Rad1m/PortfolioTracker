@@ -5,7 +5,7 @@ from datetime import datetime
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QBrush, QColor, QFont, QLinearGradient
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -150,34 +150,53 @@ class BigValueWidget(QFrame):
 
 
 class PriceChartWidget(pg.PlotWidget):
-    """Interactive price chart using pyqtgraph with crosshair."""
+    """Bloomberg-style interactive price chart with area fill and crosshair."""
 
     def __init__(self, parent=None):
-        super().__init__(parent, background=C_BG)
+        super().__init__(parent, background="#000000")
         self.setMinimumHeight(200)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        self.showGrid(x=True, y=True, alpha=0.15)
-        self.getAxis("bottom").setPen(pg.mkPen(C_TEXT_DIM))
-        self.getAxis("left").setPen(pg.mkPen(C_TEXT_DIM))
-        self.getAxis("bottom").setTextPen(pg.mkPen(C_TEXT_DIM))
-        self.getAxis("left").setTextPen(pg.mkPen(C_TEXT_DIM))
+        # Grid: subtle dashed grey lines
+        self.showGrid(x=True, y=True, alpha=0.2)
+        self.getPlotItem().getAxis("bottom").setGrid(100)
+        self.getPlotItem().getAxis("left").setGrid(100)
+        grid_pen = pg.mkPen("#444444", width=1, style=Qt.DashLine)
+        for axis_name in ("bottom", "left"):
+            ax = self.getAxis(axis_name)
+            ax.setPen(pg.mkPen("#555555"))
+            ax.setTextPen(pg.mkPen("#aaaaaa"))
+            ax.setTickFont(QFont("Menlo", 9))
+
+        # Show price axis on the right
+        self.showAxis("right")
+        self.getAxis("right").setPen(pg.mkPen("#555555"))
+        self.getAxis("right").setTextPen(pg.mkPen("#aaaaaa"))
+        self.getAxis("right").setTickFont(QFont("Menlo", 9))
+        self.getAxis("right").setWidth(60)
 
         self._dates = []
         self._closes = []
 
-        # Crosshair
-        self._vline = pg.InfiniteLine(angle=90, pen=pg.mkPen(C_TEXT_DIM, style=Qt.DashLine))
-        self._hline = pg.InfiniteLine(angle=0, pen=pg.mkPen(C_TEXT_DIM, style=Qt.DashLine))
+        # Crosshair — yellow like Bloomberg
+        self._vline = pg.InfiniteLine(angle=90, pen=pg.mkPen("#ffcc00", width=1, style=Qt.DashLine))
+        self._hline = pg.InfiniteLine(angle=0, pen=pg.mkPen("#ffcc00", width=1, style=Qt.DashLine))
         self.addItem(self._vline, ignoreBounds=True)
         self.addItem(self._hline, ignoreBounds=True)
         self._vline.setVisible(False)
         self._hline.setVisible(False)
 
-        self._tooltip = pg.TextItem(color=C_TEXT, anchor=(0, 1))
+        # Tooltip with black background
+        self._tooltip = pg.TextItem(color="#ffffff", anchor=(0, 1), fill=pg.mkBrush("#000000cc"))
         self._tooltip.setFont(QFont("Menlo", 10))
         self.addItem(self._tooltip, ignoreBounds=True)
         self._tooltip.setVisible(False)
+
+        # Last price label on right edge
+        self._price_label = pg.TextItem(color="#ffffff", anchor=(0, 0.5), fill=pg.mkBrush("#e8c96a"))
+        self._price_label.setFont(QFont("Menlo", 9))
+        self.addItem(self._price_label, ignoreBounds=True)
+        self._price_label.setVisible(False)
 
         self.scene().sigMouseMoved.connect(self._on_mouse_moved)
 
@@ -185,20 +204,39 @@ class PriceChartWidget(pg.PlotWidget):
         self._dates = dates
         self._closes = closes
         self.clear()
-        # Re-add crosshair items
+        # Re-add overlay items after clear
         self.addItem(self._vline, ignoreBounds=True)
         self.addItem(self._hline, ignoreBounds=True)
         self.addItem(self._tooltip, ignoreBounds=True)
+        self.addItem(self._price_label, ignoreBounds=True)
 
         if not closes:
-            self.setTitle(f"{title} — No data", color=C_TEXT_DIM)
+            self.setTitle(f"{title} — No data", color="#888888")
+            self._price_label.setVisible(False)
             return
 
-        self.setTitle(f"{title} — 3 Month Price", color=C_TEXT)
-        x = list(range(len(closes)))
-        self.plot(x, closes, pen=pg.mkPen(C_ACCENT, width=2))
+        self.setTitle(f"{title} — 3 Month Price", color="#ffffff", size="11pt")
+        x = np.arange(len(closes))
+        y = np.array(closes, dtype=float)
 
-        # Set x-axis tick labels
+        # Area fill under the line — subtle gradient
+        fill = pg.FillBetweenItem(
+            pg.PlotDataItem(x, y),
+            pg.PlotDataItem(x, np.full_like(y, y.min())),
+            brush=pg.mkBrush(255, 255, 255, 25),
+        )
+        self.addItem(fill)
+
+        # Main price line — white
+        self.plot(x, y, pen=pg.mkPen("#ffffff", width=1.5))
+
+        # Last price label
+        last_price = closes[-1]
+        self._price_label.setText(f" {last_price:,.2f} ")
+        self._price_label.setPos(len(closes) - 1, last_price)
+        self._price_label.setVisible(True)
+
+        # X-axis date labels
         n = len(dates)
         if n > 1:
             step = max(1, n // 6)
@@ -218,7 +256,7 @@ class PriceChartWidget(pg.PlotWidget):
             self._hline.setPos(self._closes[x])
             self._vline.setVisible(True)
             self._hline.setVisible(True)
-            self._tooltip.setText(f"{self._dates[x]}  {self._closes[x]:.2f}")
+            self._tooltip.setText(f"  {self._dates[x]}  {self._closes[x]:,.2f}  ")
             self._tooltip.setPos(x, self._closes[x])
             self._tooltip.setVisible(True)
         else:
