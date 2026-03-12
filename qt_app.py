@@ -140,8 +140,9 @@ class PortfolioPage(QWidget):
     def __init__(self, portfolio: Portfolio, parent=None):
         super().__init__(parent)
         self.portfolio = portfolio
-        self._workers = {}  # tab_key -> MarketWorker
-        self._panels = {}   # tab_key -> HoldingsPanel
+        self._workers = {}   # tab_key -> MarketWorker
+        self._panels = {}    # tab_key -> HoldingsPanel
+        self._tab_data = {}  # tab_key -> last worker result dict
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -169,6 +170,7 @@ class PortfolioPage(QWidget):
     def _build_tabs(self):
         self._tabs.clear()
         self._panels.clear()
+        self._tab_data.clear()
 
         # "All" tab
         panel = HoldingsPanel(portfolio_name=None)
@@ -183,12 +185,10 @@ class PortfolioPage(QWidget):
             self._tabs.addTab(panel, name)
 
     def _on_tab_changed(self, index):
-        # Refresh the active tab's data
         key = self._active_tab_key()
-        panel = self._panels.get(key)
-        if panel and panel._rows:
-            # Already has data, just update header/big value
-            self._update_header_from_panel(panel)
+        data = self._tab_data.get(key)
+        if data:
+            self._update_from_data(data, key)
 
     def _active_tab_key(self) -> str | None:
         idx = self._tabs.currentIndex()
@@ -234,13 +234,14 @@ class PortfolioPage(QWidget):
         if not panel:
             return
 
+        self._tab_data[tab_key] = data
         panel.update_data(data)
 
         # Update header/big value/chart for active tab
         if tab_key == self._active_tab_key():
-            self._update_from_data(data)
+            self._update_from_data(data, tab_key)
 
-    def _update_from_data(self, data):
+    def _update_from_data(self, data, tab_key=None):
         if data.get("empty"):
             self._header.update_stats()
             self._big_value.setVisible(False)
@@ -253,7 +254,7 @@ class PortfolioPage(QWidget):
         total_pnl = total_value - total_cost
         total_pnl_pct = (total_pnl / total_cost * 100) if total_cost > 0 else 0.0
 
-        sort_label = SORT_LABELS.get(data.get("sort_mode", "ticker"), "")
+        sort_label = SORT_LABELS.get(data.get("sort_mode", self.portfolio.sort_mode), "")
         self._header.update_stats(total_value, total_pnl, total_pnl_pct, sort_label)
 
         self._big_value.setVisible(True)
@@ -268,23 +269,10 @@ class PortfolioPage(QWidget):
         chart_data = data.get("chart_data", {})
         if chart_data.get("dates"):
             self._chart.setVisible(True)
-            label = self._active_tab_key() or "Portfolio"
+            label = tab_key or "Portfolio"
             self._chart.set_data(label, chart_data["dates"], chart_data["closes"])
         else:
             self._chart.setVisible(False)
-
-    def _update_header_from_panel(self, panel):
-        """Update header/big value from existing panel data."""
-        if not panel._rows:
-            return
-        # Reconstruct totals
-        rows = panel._rows
-        total_value = sum(r["value"] for r in rows)
-        total_cost = sum(r["shares"] * r["avg"] for r in rows)
-        total_pnl = total_value - total_cost
-        total_pnl_pct = (total_pnl / total_cost * 100) if total_cost > 0 else 0.0
-        sort_label = SORT_LABELS.get(self.portfolio.sort_mode, "")
-        self._header.update_stats(total_value, total_pnl, total_pnl_pct, sort_label)
 
     def cycle_sort(self):
         idx = SORT_MODES.index(self.portfolio.sort_mode)
