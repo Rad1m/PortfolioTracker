@@ -1,0 +1,430 @@
+"""Custom PySide6 widgets for Portfolio Tracker."""
+
+from datetime import datetime
+
+import numpy as np
+import pyqtgraph as pg
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor, QFont
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QSizePolicy,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+# Colors matching TUI theme
+C_BG = "#1e1e1e"
+C_SURFACE = "#2a2a2a"
+C_ACCENT = "#5b9bd5"
+C_POSITIVE = "#6a9955"
+C_NEGATIVE = "#d16969"
+C_TEXT = "#d4d4d4"
+C_TEXT_DIM = "#808080"
+C_SELECTION = "#2a4a6b"
+
+SORT_MODES = ["ticker", "value", "pnl_pct_desc", "pnl_pct_asc"]
+SORT_LABELS = {
+    "ticker": "Ticker A→Z",
+    "value": "Value ↓",
+    "pnl_pct_desc": "P&L% ↓",
+    "pnl_pct_asc": "P&L% ↑",
+}
+CURRENCIES = ["USD", "GBP", "EUR", "CHF", "JPY"]
+CURRENCY_SYMBOLS = {
+    "USD": "$", "GBP": "£", "EUR": "€", "CHF": "CHF ", "JPY": "¥",
+}
+
+
+def _pnl_color(value: float) -> str:
+    return C_POSITIVE if value >= 0 else C_NEGATIVE
+
+
+def _right_aligned_item(text: str, color: str | None = None) -> QTableWidgetItem:
+    item = QTableWidgetItem(text)
+    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+    if color:
+        item.setForeground(QColor(color))
+    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+    return item
+
+
+def _left_aligned_item(text: str, color: str | None = None) -> QTableWidgetItem:
+    item = QTableWidgetItem(text)
+    item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+    if color:
+        item.setForeground(QColor(color))
+    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+    return item
+
+
+class HeaderBar(QFrame):
+    """Top bar showing portfolio total, P&L, update time, and sort mode."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(40)
+        self.setStyleSheet(f"background: {C_SURFACE}; padding: 0 12px;")
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 0, 12, 0)
+
+        self._title = QLabel("PORTFOLIO TRACKER")
+        self._title.setStyleSheet(f"color: {C_ACCENT}; font-weight: bold; font-size: 14px;")
+        layout.addWidget(self._title)
+
+        self._stats = QLabel("")
+        self._stats.setStyleSheet(f"color: {C_TEXT}; font-size: 13px;")
+        layout.addWidget(self._stats)
+
+        layout.addStretch()
+
+        self._status = QLabel("Loading...")
+        self._status.setStyleSheet(f"color: {C_TEXT_DIM}; font-size: 12px;")
+        layout.addWidget(self._status)
+
+    def update_stats(self, total=0.0, pnl=0.0, pnl_pct=0.0, sort_hint="", loading=False):
+        if loading and total == 0:
+            self._stats.setText("")
+            self._status.setText("Loading...")
+            return
+
+        pnl_col = _pnl_color(pnl)
+        self._stats.setText(
+            f"Total: {total:,.2f}   "
+            f'<span style="color:{pnl_col}">P&L: {pnl:+,.2f} ({pnl_pct:+.1f}%)</span>'
+        )
+        self._stats.setTextFormat(Qt.RichText)
+
+        if loading:
+            self._status.setText("Refreshing...")
+        else:
+            now = datetime.now().strftime("%H:%M")
+            sort_part = f"  Sort: {sort_hint}" if sort_hint else ""
+            self._status.setText(f"Last update: {now}{sort_part}")
+
+
+class BigValueWidget(QFrame):
+    """Large-font portfolio total with P&L / Today / 3M percentages."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(90)
+        self.setStyleSheet(f"background: {C_BG};")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 8, 20, 8)
+        layout.setSpacing(4)
+
+        self._value_label = QLabel("")
+        self._value_label.setStyleSheet(f"color: {C_TEXT}; font-size: 48px; font-weight: bold;")
+        self._value_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._value_label)
+
+        self._stats_label = QLabel("")
+        self._stats_label.setAlignment(Qt.AlignCenter)
+        self._stats_label.setTextFormat(Qt.RichText)
+        self._stats_label.setStyleSheet("font-size: 14px;")
+        layout.addWidget(self._stats_label)
+
+    def set_value(self, value, currency="USD", pnl_pct=0.0, day_pct=0.0, three_month_pct=0.0):
+        symbol = CURRENCY_SYMBOLS.get(currency, currency + " ")
+        self._value_label.setText(f"{symbol}{value:,.0f}")
+
+        def _span(label, v, fmt="+.1f"):
+            col = _pnl_color(v)
+            return f'{label}: <span style="color:{col}">{v:{fmt}}%</span>'
+
+        self._stats_label.setText(
+            f"{_span('Total P&L', pnl_pct)}    "
+            f"{_span('Today', day_pct, '+.2f')}    "
+            f"{_span('3M', three_month_pct)}"
+        )
+
+
+class PriceChartWidget(pg.PlotWidget):
+    """Interactive price chart using pyqtgraph with crosshair."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent, background=C_BG)
+        self.setMinimumHeight(200)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        self.showGrid(x=True, y=True, alpha=0.15)
+        self.getAxis("bottom").setPen(pg.mkPen(C_TEXT_DIM))
+        self.getAxis("left").setPen(pg.mkPen(C_TEXT_DIM))
+        self.getAxis("bottom").setTextPen(pg.mkPen(C_TEXT_DIM))
+        self.getAxis("left").setTextPen(pg.mkPen(C_TEXT_DIM))
+
+        self._dates = []
+        self._closes = []
+
+        # Crosshair
+        self._vline = pg.InfiniteLine(angle=90, pen=pg.mkPen(C_TEXT_DIM, style=Qt.DashLine))
+        self._hline = pg.InfiniteLine(angle=0, pen=pg.mkPen(C_TEXT_DIM, style=Qt.DashLine))
+        self.addItem(self._vline, ignoreBounds=True)
+        self.addItem(self._hline, ignoreBounds=True)
+        self._vline.setVisible(False)
+        self._hline.setVisible(False)
+
+        self._tooltip = pg.TextItem(color=C_TEXT, anchor=(0, 1))
+        self._tooltip.setFont(QFont("Menlo", 10))
+        self.addItem(self._tooltip, ignoreBounds=True)
+        self._tooltip.setVisible(False)
+
+        self.scene().sigMouseMoved.connect(self._on_mouse_moved)
+
+    def set_data(self, title, dates, closes):
+        self._dates = dates
+        self._closes = closes
+        self.clear()
+        # Re-add crosshair items
+        self.addItem(self._vline, ignoreBounds=True)
+        self.addItem(self._hline, ignoreBounds=True)
+        self.addItem(self._tooltip, ignoreBounds=True)
+
+        if not closes:
+            self.setTitle(f"{title} — No data", color=C_TEXT_DIM)
+            return
+
+        self.setTitle(f"{title} — 3 Month Price", color=C_TEXT)
+        x = list(range(len(closes)))
+        self.plot(x, closes, pen=pg.mkPen(C_ACCENT, width=2))
+
+        # Set x-axis tick labels
+        n = len(dates)
+        if n > 1:
+            step = max(1, n // 6)
+            ticks = [(i, dates[i][5:]) for i in range(0, n, step)]
+            if ticks[-1][0] != n - 1:
+                ticks.append((n - 1, dates[-1][5:]))
+            self.getAxis("bottom").setTicks([ticks])
+
+    def _on_mouse_moved(self, pos):
+        if not self._closes:
+            return
+        vb = self.getViewBox()
+        mouse_point = vb.mapSceneToView(pos)
+        x = int(round(mouse_point.x()))
+        if 0 <= x < len(self._closes):
+            self._vline.setPos(x)
+            self._hline.setPos(self._closes[x])
+            self._vline.setVisible(True)
+            self._hline.setVisible(True)
+            self._tooltip.setText(f"{self._dates[x]}  {self._closes[x]:.2f}")
+            self._tooltip.setPos(x, self._closes[x])
+            self._tooltip.setVisible(True)
+        else:
+            self._vline.setVisible(False)
+            self._hline.setVisible(False)
+            self._tooltip.setVisible(False)
+
+
+class HoldingsPanel(QWidget):
+    """Table of holdings for one portfolio tab, with associated data worker."""
+
+    row_activated = Signal(str, str)  # ticker, name
+
+    COLUMNS = ["Ticker", "Name", "Shares", "Avg Cost", "Price", "Value", "P&L", "P&L %", "Alloc %"]
+
+    def __init__(self, portfolio_name: str | None = None, parent=None):
+        super().__init__(parent)
+        self.portfolio_name = portfolio_name
+        self._rows = []
+        self._tickers = []
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self._loading_label = QLabel("Fetching market data, please wait...")
+        self._loading_label.setAlignment(Qt.AlignCenter)
+        self._loading_label.setStyleSheet(f"color: {C_TEXT_DIM}; font-size: 14px; padding: 40px;")
+        layout.addWidget(self._loading_label)
+
+        self._empty_label = QLabel("No holdings yet. Press B to add your first transaction.")
+        self._empty_label.setAlignment(Qt.AlignCenter)
+        self._empty_label.setStyleSheet(f"color: {C_TEXT_DIM}; font-size: 14px; padding: 40px;")
+        self._empty_label.setVisible(False)
+        layout.addWidget(self._empty_label)
+
+        self._table = QTableWidget()
+        self._table.setColumnCount(len(self.COLUMNS))
+        self._table.setHorizontalHeaderLabels(self.COLUMNS)
+        self._table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._table.setSelectionMode(QTableWidget.SingleSelection)
+        self._table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._table.verticalHeader().setVisible(False)
+        self._table.horizontalHeader().setStretchLastSection(True)
+        self._table.setVisible(False)
+        self._table.cellDoubleClicked.connect(self._on_row_activated)
+        layout.addWidget(self._table)
+
+    def _on_row_activated(self, row, _col):
+        if 0 <= row < len(self._tickers):
+            ticker = self._tickers[row]
+            name = ""
+            for r in self._rows:
+                if r["ticker"] == ticker:
+                    name = r["name"]
+                    break
+            self.row_activated.emit(ticker, name)
+
+    def activate_selected_row(self):
+        """Activate (drill-down) the currently selected row."""
+        rows = self._table.selectionModel().selectedRows()
+        if rows:
+            row = rows[0].row()
+            self._on_row_activated(row, 0)
+
+    def get_selected_ticker(self) -> str | None:
+        rows = self._table.selectionModel().selectedRows()
+        if rows:
+            row = rows[0].row()
+            if 0 <= row < len(self._tickers):
+                return self._tickers[row]
+        return None
+
+    def update_data(self, data: dict):
+        """Update table from worker result dict."""
+        if data.get("empty"):
+            self._loading_label.setVisible(False)
+            self._empty_label.setVisible(True)
+            self._table.setVisible(False)
+            return
+
+        self._rows = data["rows"]
+        self._render_table(data.get("sort_mode", "ticker"))
+
+    def _render_table(self, sort_mode: str):
+        self._loading_label.setVisible(False)
+        self._empty_label.setVisible(False)
+        self._table.setVisible(True)
+
+        rows = self._sorted_rows(sort_mode)
+        self._tickers = [r["ticker"] for r in rows]
+        total_value = sum(r["value"] for r in rows)
+
+        self._table.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            alloc_pct = (r["value"] / total_value * 100) if total_value > 0 else 0.0
+            pnl_col = _pnl_color(r["pnl"])
+
+            self._table.setItem(i, 0, _left_aligned_item(r["ticker"]))
+            self._table.setItem(i, 1, _left_aligned_item(r["name"][:25]))
+            self._table.setItem(i, 2, _right_aligned_item(f"{r['shares']:.2f}"))
+            self._table.setItem(i, 3, _right_aligned_item(f"{r['avg']:.2f}"))
+            self._table.setItem(i, 4, _right_aligned_item(f"{r['price']:.2f}"))
+            self._table.setItem(i, 5, _right_aligned_item(f"{r['value']:,.2f}"))
+            self._table.setItem(i, 6, _right_aligned_item(f"{r['pnl']:+,.2f}", pnl_col))
+            self._table.setItem(i, 7, _right_aligned_item(f"{r['pnl_pct']:+.1f}%", pnl_col))
+            self._table.setItem(i, 8, _right_aligned_item(f"{alloc_pct:.1f}%"))
+
+        # Auto-resize columns
+        header = self._table.horizontalHeader()
+        for col in range(len(self.COLUMNS) - 1):
+            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(len(self.COLUMNS) - 1, QHeaderView.Stretch)
+
+    def _sorted_rows(self, mode: str) -> list[dict]:
+        rows = list(self._rows)
+        if mode == "ticker":
+            rows.sort(key=lambda r: r["ticker"])
+        elif mode == "value":
+            rows.sort(key=lambda r: r["value"], reverse=True)
+        elif mode == "pnl_pct_desc":
+            rows.sort(key=lambda r: r["pnl_pct"], reverse=True)
+        elif mode == "pnl_pct_asc":
+            rows.sort(key=lambda r: r["pnl_pct"])
+        return rows
+
+    def re_render(self, sort_mode: str):
+        """Re-render existing data with a new sort mode."""
+        if self._rows:
+            self._render_table(sort_mode)
+
+
+class StockDetailWidget(QFrame):
+    """Panel showing stock key stats and position summary."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(f"background: {C_SURFACE}; padding: 12px; margin: 4px;")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 8)
+
+        self._content = QLabel("")
+        self._content.setStyleSheet(f"color: {C_TEXT}; font-size: 13px;")
+        self._content.setTextFormat(Qt.RichText)
+        self._content.setWordWrap(True)
+        layout.addWidget(self._content)
+
+    def set_data(self, ticker_info, shares=0, avg_cost=0):
+        price = ticker_info.get("price", 0)
+        currency = ticker_info.get("currency", "")
+        value = shares * price
+        cost = shares * avg_cost
+        pnl = value - cost
+        pnl_pct = (pnl / cost * 100) if cost > 0 else 0.0
+        pnl_col = _pnl_color(pnl)
+
+        lines = []
+        if shares > 0:
+            lines.append(f'<b style="color:{C_ACCENT}">Your Position</b>')
+            lines.append(
+                f"  Shares: <b>{shares:.2f}</b>    "
+                f"Avg Cost: {avg_cost:.2f}    "
+                f"Value: <b>{value:,.2f}</b> {currency}"
+            )
+            lines.append(f'  P&L: <span style="color:{pnl_col}">{pnl:+,.2f} ({pnl_pct:+.1f}%)</span>')
+            lines.append("")
+
+        lines.append(f'<b style="color:{C_ACCENT}">Key Stats</b>')
+
+        def _fmt(val, fmt=".2f"):
+            return f"{val:{fmt}}" if val is not None else "N/A"
+
+        def _fmt_cap(val):
+            if val is None:
+                return "N/A"
+            if val >= 1e12:
+                return f"{val/1e12:.2f}T"
+            if val >= 1e9:
+                return f"{val/1e9:.2f}B"
+            if val >= 1e6:
+                return f"{val/1e6:.1f}M"
+            return f"{val:,.0f}"
+
+        stats = [
+            ("Market Cap", _fmt_cap(ticker_info.get("market_cap"))),
+            ("P/E Ratio", _fmt(ticker_info.get("pe_ratio"))),
+            ("Forward P/E", _fmt(ticker_info.get("forward_pe"))),
+            ("Div Yield", f"{ticker_info['dividend_yield']:.2%}" if ticker_info.get("dividend_yield") is not None else "N/A"),
+            ("52W High", _fmt(ticker_info.get("high_52w"))),
+            ("52W Low", _fmt(ticker_info.get("low_52w"))),
+            ("Beta", _fmt(ticker_info.get("beta"))),
+        ]
+
+        mid = (len(stats) + 1) // 2
+        for i in range(mid):
+            left = stats[i]
+            right = stats[i + mid] if i + mid < len(stats) else None
+            line = f"  {left[0]:<14} <b>{left[1]:>10}</b>"
+            if right:
+                line += f"     {right[0]:<14} <b>{right[1]:>10}</b>"
+            lines.append(line)
+
+        sector = ticker_info.get("sector")
+        industry = ticker_info.get("industry")
+        if sector or industry:
+            lines.append(
+                f"  {'Sector':<14} <b>{sector or 'N/A':>10}</b>"
+                f"     {'Industry':<14} <b>{(industry or 'N/A')[:20]:>10}</b>"
+            )
+
+        self._content.setText("<pre>" + "\n".join(lines) + "</pre>")

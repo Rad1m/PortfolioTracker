@@ -1,3 +1,6 @@
 yfinance
 textual
 textual-plotext
+PySide6
+pyqtgraph
+numpy
