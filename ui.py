@@ -871,3 +871,48 @@ class CreatePortfolioModal(ModalScreen[str | None]):
 
     def action_cancel(self):
         self.dismiss(None)
+
+
+class MoveToPortfolioModal(ModalScreen[str | None]):
+    """Modal for selecting a target portfolio to move a transaction to."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, portfolios: list[str], current_portfolio: str = ""):
+        super().__init__()
+        self._portfolios = portfolios
+        self._current = current_portfolio
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-dialog"):
+            yield Static("Move to Portfolio", id="modal-title")
+            yield Static(
+                f"Current: [bold]{self._current or '(untagged)'}[/]",
+                classes="field-label",
+            )
+            yield DataTable(id="move-table", cursor_type="row")
+            with Horizontal(id="modal-buttons"):
+                yield Button("Cancel", id="btn-cancel")
+
+    def on_mount(self) -> None:
+        table = self.query_one("#move-table", DataTable)
+        table.add_columns("#", "Portfolio")
+        table.add_row("0", "(untagged)")
+        for i, name in enumerate(self._portfolios, 1):
+            label = f"{name}  ← current" if name == self._current else name
+            table.add_row(str(i), label)
+
+    def on_data_table_row_selected(self, event) -> None:
+        row_idx = event.cursor_row
+        if row_idx == 0:
+            self.dismiss("")
+        elif 1 <= row_idx <= len(self._portfolios):
+            self.dismiss(self._portfolios[row_idx - 1])
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(None)
+
+    def action_cancel(self):
+        self.dismiss(None)

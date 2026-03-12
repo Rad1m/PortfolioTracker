@@ -23,6 +23,7 @@ from ui import (
     BigValue,
     ImportModal,
     LoadingIndicator,
+    MoveToPortfolioModal,
     PortfolioHeader,
     PriceChart,
     StockDetail,
@@ -784,6 +785,7 @@ class TransactionHistoryScreen(Screen):
     BINDINGS = [
         Binding("escape", "go_back", "Back"),
         Binding("d", "delete_transaction", "Delete"),
+        Binding("m", "move_transaction", "Move"),
     ]
 
     def __init__(self, portfolio_name: str | None = None):
@@ -861,6 +863,29 @@ class TransactionHistoryScreen(Screen):
         txn = self._transactions[row_idx]
         portfolio: Portfolio = self.app.portfolio  # type: ignore[attr-defined]
         portfolio.delete_transaction(txn)
+        self._load_transactions()
+
+    def action_move_transaction(self) -> None:
+        table = self.query_one("#history-table", DataTable)
+        row_idx = table.cursor_row
+        if row_idx < 0 or row_idx >= len(self._transactions):
+            return
+        txn = self._transactions[row_idx]
+        portfolio: Portfolio = self.app.portfolio  # type: ignore[attr-defined]
+        self._move_txn = txn
+        self.app.push_screen(
+            MoveToPortfolioModal(portfolio.portfolios, current_portfolio=txn.portfolio),
+            callback=self._on_move_selected,
+        )
+
+    def _on_move_selected(self, target: str | None) -> None:
+        if target is None:
+            return
+        txn = self._move_txn
+        if txn.portfolio == target:
+            return
+        portfolio: Portfolio = self.app.portfolio  # type: ignore[attr-defined]
+        portfolio.move_transaction(txn, target)
         self._load_transactions()
 
     def action_go_back(self) -> None:

@@ -66,6 +66,11 @@ class Portfolio:
                 return True
         return False
 
+    def move_transaction(self, txn: Transaction, new_portfolio: str) -> None:
+        """Move a transaction to a different portfolio."""
+        txn.portfolio = new_portfolio
+        self.save()
+
     def _filtered_transactions(self, portfolio_name: str | None) -> list[Transaction]:
         """Return transactions filtered by portfolio tag. None means all."""
         if portfolio_name is None:
