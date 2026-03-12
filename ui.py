@@ -8,7 +8,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Button, Footer, Input, Label, Static
+from textual.widgets import Button, DataTable, Footer, Input, Label, Static
 from textual_plotext import PlotextPlot
 
 
