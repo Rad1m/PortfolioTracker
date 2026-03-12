@@ -257,6 +257,21 @@ PortfolioView {
     color: $text-primary;
 }
 
+/* ETF drill-down row */
+#etf-row {
+    height: 1fr;
+}
+
+#etf-holdings-table {
+    width: 1fr;
+}
+
+#etf-bars {
+    width: 1fr;
+    padding: 1 2;
+    color: $text-primary;
+}
+
 /* Price chart */
 #price-chart {
     height: 15;

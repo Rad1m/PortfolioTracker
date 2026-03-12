@@ -756,7 +756,9 @@ class DrillDownScreen(Screen):
         )
         yield LoadingIndicator("Fetching data, please wait...", id="loading")
         yield StockDetail(id="stock-detail")
-        yield DataTable(id="etf-holdings-table", cursor_type="row")
+        with Horizontal(id="etf-row"):
+            yield DataTable(id="etf-holdings-table", cursor_type="row")
+            yield Static("", id="etf-bars")
         yield EmptyState(id="empty-state")
         yield PriceChart(id="price-chart")
         yield Footer()
@@ -765,7 +767,7 @@ class DrillDownScreen(Screen):
         table = self.query_one("#etf-holdings-table", DataTable)
         table.add_columns("#", "Symbol", "Name", "Weight %", "Price", "Day %")
         self.query_one("#stock-detail").display = False
-        self.query_one("#etf-holdings-table").display = False
+        self.query_one("#etf-row").display = False
         self.query_one("#empty-state").display = False
         self.query_one("#price-chart").display = False
         self.load_data()
@@ -813,10 +815,28 @@ class DrillDownScreen(Screen):
         empty.update("Holdings data not available for this ticker.")
         empty.display = True
 
+    @staticmethod
+    def _render_bar_chart(items: list[tuple[str, float, float]], bar_width: int = 30) -> str:
+        """Render a horizontal bar chart. items: list of (label, weight, change_pct)."""
+        if not items:
+            return ""
+        max_weight = max(w for _, w, _ in items)
+        lines = []
+        for label, weight, change_pct in items:
+            bar_len = int(weight / max_weight * bar_width) if max_weight > 0 else 0
+            bar_len = max(1, bar_len)
+            color = "#6a9955" if change_pct >= 0 else "#d16969"
+            bar = "█" * bar_len
+            pct_str = f"{change_pct:+.2f}%"
+            lines.append(
+                f"  {label:<12} [{color}]{bar}[/] {weight:5.1f}%  [{color}]{pct_str}[/]"
+            )
+        return "\n".join(lines)
+
     def _update_etf_table(self, holdings: list[dict], prices: dict[str, dict]) -> None:
         self.query_one("#loading").display = False
+        self.query_one("#etf-row").display = True
         table = self.query_one("#etf-holdings-table", DataTable)
-        table.display = True
         table.clear()
 
         total_weight = sum(h["weight"] for h in holdings)
@@ -826,12 +846,13 @@ class DrillDownScreen(Screen):
             f"    Weight coverage: {total_weight:.0f}%"
         )
 
+        bar_items = []
         for i, h in enumerate(holdings, 1):
             symbol = h["symbol"]
             info = prices.get(symbol, {})
             price = info.get("price", 0)
             name = info.get("name", h.get("name", symbol))
-            change = info.get("change_pct", 0)
+            change = info.get("change_pct", 0) or 0
 
             chg_color = "green" if change >= 0 else "red"
             table.add_row(
@@ -842,6 +863,10 @@ class DrillDownScreen(Screen):
                 Text(f"{price:.2f}" if price else "N/A", justify="right"),
                 Text(f"{change:+.2f}%", style=chg_color) if price else Text("N/A"),
             )
+            bar_items.append((symbol, h["weight"], change))
+
+        etf_bars = self.query_one("#etf-bars", Static)
+        etf_bars.update(self._render_bar_chart(bar_items))
 
     def _update_stock_detail(self, ticker_info: dict, shares: float, avg_cost: float) -> None:
         self.query_one("#loading").display = False
