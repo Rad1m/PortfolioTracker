@@ -504,7 +504,7 @@ class BigValue(Static):
         )
 
         ascii_block = "\n".join(lines)
-        value_color = _color(day_pct)
+        value_color = "green" if day_pct >= 0 else "#e07070"
         self.update(f"[dim]{symbol}[/]\n[bold {value_color}]{ascii_block}[/]\n{stats}")
 
 
