@@ -223,7 +223,7 @@ class PriceChartWidget(pg.PlotWidget):
         fill = pg.FillBetweenItem(
             pg.PlotDataItem(x, y),
             pg.PlotDataItem(x, np.full_like(y, y.min())),
-            brush=pg.mkBrush(255, 255, 255, 25),
+            brush=pg.mkBrush(91, 155, 213, 50),
         )
         self.addItem(fill)
 
