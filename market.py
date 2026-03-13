@@ -180,6 +180,27 @@ def get_ticker_info(ticker: str) -> dict:
     return result
 
 
+def get_long_names(tickers: list[str]) -> dict[str, str]:
+    """Get longName for tickers, using cache. Falls back to shortName."""
+    results = {}
+    for ticker in tickers:
+        cached = _get_cached(f"longname:{ticker}")
+        if cached:
+            results[ticker] = cached.get("name", ticker)
+            continue
+
+        try:
+            t = yf.Ticker(ticker)
+            info = t.info
+            name = info.get("longName") or info.get("shortName", ticker)
+        except Exception:
+            name = ticker
+
+        _set_cache(f"longname:{ticker}", {"name": name})
+        results[ticker] = name
+    return results
+
+
 def get_etf_holdings(ticker: str) -> list[dict]:
     """Get top holdings for an ETF.
 

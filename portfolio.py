@@ -12,7 +12,8 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Static, TabbedContent, TabPane
 from textual import work
 
-from market import clear_cache, get_etf_holdings, get_exchange_rates, get_history, get_prices, get_ticker_info
+from market import clear_cache, get_etf_holdings, get_exchange_rates, get_history, get_long_names, get_prices, get_ticker_info
+from news import fetch_news, clear_cache as clear_news_cache
 from storage import Portfolio, Transaction
 from ui import (
     APP_CSS,
@@ -24,6 +25,7 @@ from ui import (
     ImportModal,
     LoadingIndicator,
     MoveToPortfolioModal,
+    NewsSidebar,
     PortfolioHeader,
     PriceChart,
     StockDetail,
@@ -315,7 +317,8 @@ class PortfolioScreen(Screen):
         Binding("c", "cycle_currency", "Currency"),
         Binding("a", "allocation", "Allocation"),
         Binding("m", "move_ticker", "Move Ticker"),
-        Binding("n", "new_portfolio", "New Portfolio"),
+        Binding("n", "toggle_news", "News"),
+        Binding("p", "new_portfolio", "New Portfolio"),
         Binding("d", "delete_portfolio", "Delete Portfolio"),
         Binding("1", "tab_1", "Tab 1", show=False),
         Binding("2", "tab_2", "Tab 2", show=False),
@@ -328,6 +331,10 @@ class PortfolioScreen(Screen):
         Binding("9", "tab_9", "Tab 9", show=False),
     ]
 
+    def __init__(self):
+        super().__init__()
+        self._news_visible = True
+
     def compose(self) -> ComposeResult:
         portfolio: Portfolio = self.app.portfolio  # type: ignore[attr-defined]
         with TabbedContent(id="portfolio-tabs"):
@@ -336,7 +343,33 @@ class PortfolioScreen(Screen):
             for name in portfolio.portfolios:
                 with TabPane(name, id=_safe_id(name)):
                     yield PortfolioView(portfolio_name=name)
+        yield NewsSidebar(id="news-sidebar")
         yield Footer()
+
+    def on_mount(self) -> None:
+        self._refresh_news()
+
+    def action_toggle_news(self) -> None:
+        sidebar = self.query_one("#news-sidebar", NewsSidebar)
+        if sidebar.display:
+            sidebar.display = False
+            self._news_visible = False
+        else:
+            sidebar.display = True
+            self._news_visible = True
+            self._refresh_news()
+
+    @work(thread=True)
+    def _refresh_news(self) -> None:
+        portfolio: Portfolio = self.app.portfolio  # type: ignore[attr-defined]
+        holdings = portfolio.get_holdings()
+        if not holdings:
+            return
+        tickers = sorted(holdings.keys())
+        names = get_long_names(tickers)
+        items = fetch_news(tickers, names=names)
+        sidebar = self.query_one("#news-sidebar", NewsSidebar)
+        self.app.call_from_thread(sidebar.set_items, items)
 
     def _active_view(self) -> PortfolioView | None:
         tabbed = self.query_one("#portfolio-tabs", TabbedContent)
@@ -987,9 +1020,12 @@ class PortfolioApp(App):
 
     def action_refresh(self) -> None:
         clear_cache()
+        clear_news_cache()
         screen = self.screen
         if hasattr(screen, "_refresh_all_views"):
             screen._refresh_all_views()
+            if hasattr(screen, "_news_visible") and screen._news_visible:
+                screen._refresh_news()
         elif hasattr(screen, "refresh_data"):
             screen.refresh_data()
         elif hasattr(screen, "load_data"):

@@ -413,8 +413,8 @@ class HelpDialog(QDialog):
   T     Transaction history
   A     Allocation
   O     Sort              C      Currency
-  I     Import CSV        N      New Portfolio
-  D     Delete portfolio
+  I     Import CSV        P      New Portfolio
+  N     News feed         D      Delete portfolio
   M     Move ticker
   1-9   Switch portfolio tabs</pre>
 

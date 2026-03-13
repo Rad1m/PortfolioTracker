@@ -843,6 +843,110 @@ class StockDetail(Static):
         self.update("\n".join(lines))
 
 
+class NewsSidebar(Widget, can_focus=True):
+    """Sidebar showing portfolio-aware financial news."""
+
+    DEFAULT_CSS = """
+    NewsSidebar {
+        dock: right;
+        width: 45;
+        height: 1fr;
+        background: #2a2a2a;
+        border-left: solid #444;
+        padding: 0 1;
+        overflow-y: auto;
+    }
+    NewsSidebar:focus {
+        border-left: solid #5b9bd5;
+    }
+    """
+
+    BINDINGS = [
+        Binding("up", "cursor_up", "Up", show=False),
+        Binding("down", "cursor_down", "Down", show=False),
+        Binding("enter", "open_article", "Open", show=False),
+    ]
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._items: list = []  # list of NewsItem
+        self._selected = 0
+
+    def set_items(self, items: list) -> None:
+        self._items = items
+        self._selected = min(self._selected, max(0, len(items) - 1))
+        self.refresh()
+
+    def render(self):
+        focused = self.has_focus
+
+        if not self._items:
+            return Text("[dim]No news available. Press R to refresh.[/]")
+
+        lines: list[Text] = []
+        lines.append(Text(""))
+        title_style = "bold #5b9bd5" if focused else "bold #808080"
+        lines.append(Text(" NEWS FEED", style=title_style))
+        lines.append(Text(" ─" * 20, style="#444"))
+        lines.append(Text(""))
+
+        for i, item in enumerate(self._items):
+            is_selected = i == self._selected and focused
+            prefix = "▸ " if is_selected else "  "
+
+            # Ticker tag
+            ticker_tag = Text(f"[{item.ticker}]", style="bold #5b9bd5")
+
+            # Title (truncate to fit)
+            max_title = 38
+            title = item.title[:max_title]
+            if len(item.title) > max_title:
+                title += "…"
+
+            if is_selected:
+                title_style = "bold white"
+            else:
+                title_style = "#d4d4d4"
+
+            line1 = Text(prefix)
+            line1.append_text(ticker_tag)
+            lines.append(line1)
+
+            line2 = Text(f"  {title}", style=title_style)
+            lines.append(line2)
+
+            meta = f"  {item.published}"
+            if item.source:
+                meta += f" · {item.source[:20]}"
+            lines.append(Text(meta, style="#808080"))
+            lines.append(Text(""))
+
+        hint = " ↑↓ Navigate  Enter Open  Tab Back  N Hide" if focused else " Tab to focus  N Hide"
+        lines.append(Text(hint, style="dim"))
+        return Group(*lines)
+
+    def action_cursor_up(self) -> None:
+        if self._items and self._selected > 0:
+            self._selected -= 1
+            self.refresh()
+
+    def action_cursor_down(self) -> None:
+        if self._items and self._selected < len(self._items) - 1:
+            self._selected += 1
+            self.refresh()
+
+    def action_open_article(self) -> None:
+        if self._items and 0 <= self._selected < len(self._items):
+            from news import open_article
+            open_article(self._items[self._selected].url)
+
+    def on_focus(self) -> None:
+        self.refresh()
+
+    def on_blur(self) -> None:
+        self.refresh()
+
+
 class HelpOverlay(ModalScreen):
     """Modal showing keyboard shortcuts."""
 
@@ -865,8 +969,8 @@ class HelpOverlay(ModalScreen):
                 "  b   Buy         s      Sell\n"
                 "  t   Transactions a  Allocation\n"
                 "  o   Sort        c  Currency\n"
-                "  i   Import CSV  n  New Portfolio\n"
-                "  d   Delete portfolio\n"
+                "  i   Import CSV  p  New Portfolio\n"
+                "  n   News feed   d  Delete portfolio\n"
                 "  1-9 Switch portfolio tabs",
                 classes="help-section",
             )

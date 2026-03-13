@@ -4,3 +4,4 @@ textual-plotext
 PySide6
 pyqtgraph
 numpy
+feedparser

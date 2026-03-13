@@ -7,6 +7,7 @@ from market import (
     get_etf_holdings,
     get_exchange_rates,
     get_history,
+    get_long_names,
     get_prices,
     get_ticker_info,
 )
@@ -129,6 +130,17 @@ def _compute_portfolio_history(holdings, histories, ticker_fx=None):
         "dates": sorted_dates,
         "closes": [date_values[d] for d in sorted_dates],
     }
+
+
+def _fetch_news_data(portfolio: Portfolio):
+    """Fetch news for all holdings."""
+    from news import fetch_news
+    holdings = portfolio.get_holdings()
+    if not holdings:
+        return []
+    tickers = sorted(holdings.keys())
+    names = get_long_names(tickers)
+    return fetch_news(tickers, names=names)
 
 
 def _fetch_drilldown_data(ticker: str, portfolio: Portfolio):

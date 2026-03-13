@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from market import clear_cache
+from news import fetch_news, clear_cache as clear_news_cache
 from storage import Portfolio, Transaction
 from qt_dialogs import (
     ConfirmDialog,
@@ -51,6 +52,7 @@ from qt_widgets import (
     BigValueWidget,
     HeaderBar,
     HoldingsPanel,
+    NewsPanelWidget,
     PriceChartWidget,
     StockDetailWidget,
     TreemapWidget,
@@ -63,6 +65,7 @@ from qt_workers import (
     _fetch_allocation_data,
     _fetch_drilldown_data,
     _fetch_holdings_data,
+    _fetch_news_data,
 )
 
 
@@ -803,9 +806,22 @@ class MainWindow(QMainWindow):
         # Screen stack for navigation
         self._screen_stack = []
 
+        # Central container: stack + news panel side by side
+        central = QWidget()
+        central_layout = QHBoxLayout(central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
+
         # Stacked widget
         self._stack = QStackedWidget()
-        self.setCentralWidget(self._stack)
+        central_layout.addWidget(self._stack, stretch=1)
+
+        # News panel (visible by default)
+        self._news_panel = NewsPanelWidget()
+        central_layout.addWidget(self._news_panel)
+        self._news_worker = None
+
+        self.setCentralWidget(central)
 
         # Pages
         self._portfolio_page = PortfolioPage(self.portfolio)
@@ -866,6 +882,7 @@ class MainWindow(QMainWindow):
 
         # Initial data load
         self._portfolio_page.refresh_all()
+        self._refresh_news()
 
     def closeEvent(self, event):
         """Wait for running workers before closing."""
@@ -875,6 +892,8 @@ class MainWindow(QMainWindow):
         for page in (self._drilldown_page, self._allocation_page):
             if page._worker:
                 workers.append(page._worker)
+        if self._news_worker and self._news_worker.isRunning():
+            workers.append(self._news_worker)
         # Disconnect signals and wait for each running worker
         for worker in workers:
             if worker.isRunning():
@@ -928,7 +947,10 @@ class MainWindow(QMainWindow):
         self._sc_move = QShortcut(QKeySequence("M"), self)
         self._sc_move.activated.connect(self._action_move)
 
-        self._sc_new_portfolio = QShortcut(QKeySequence("N"), self)
+        self._sc_news = QShortcut(QKeySequence("N"), self)
+        self._sc_news.activated.connect(self._toggle_news)
+
+        self._sc_new_portfolio = QShortcut(QKeySequence("P"), self)
         self._sc_new_portfolio.activated.connect(self._action_new_portfolio)
 
         self._sc_delete = QShortcut(QKeySequence("D"), self)
@@ -948,7 +970,7 @@ class MainWindow(QMainWindow):
         self._portfolio_shortcuts = [
             self._sc_buy, self._sc_sell, self._sc_history, self._sc_import,
             self._sc_sort, self._sc_currency, self._sc_allocation,
-            self._sc_move, self._sc_new_portfolio, self._sc_enter,
+            self._sc_move, self._sc_new_portfolio, self._sc_enter, self._sc_news,
         ] + self._tab_shortcuts
 
         self._history_shortcuts = []  # d and m are handled via _action_delete/_action_move
@@ -1006,7 +1028,8 @@ class MainWindow(QMainWindow):
                 ("O Sort", self._action_sort),
                 ("C Currency", self._action_currency),
                 ("I Import", self._action_import),
-                ("N New", self._action_new_portfolio),
+                ("N News", self._toggle_news),
+                ("P New", self._action_new_portfolio),
                 ("D Del", self._action_delete),
                 ("M Move", self._action_move),
                 ("R Refresh", self._do_refresh),
@@ -1051,11 +1074,30 @@ class MainWindow(QMainWindow):
 
     # ── Shortcut actions ──
 
+    def _toggle_news(self):
+        visible = self._news_panel.isVisible()
+        self._news_panel.setVisible(not visible)
+        if not visible:
+            self._refresh_news()
+
+    def _refresh_news(self):
+        if self._news_worker and self._news_worker.isRunning():
+            return
+        self._news_worker = MarketWorker(_fetch_news_data, self.portfolio)
+        self._news_worker.finished.connect(self._on_news_ready)
+        self._news_worker.start()
+
+    def _on_news_ready(self, items):
+        self._news_panel.set_items(items)
+
     def _do_refresh(self):
         clear_cache()
+        clear_news_cache()
         idx = self._current_page_index()
         if idx == 0:
             self._portfolio_page.refresh_all()
+        if self._news_panel.isVisible():
+            self._refresh_news()
 
     def _show_help(self):
         HelpDialog(parent=self).exec()

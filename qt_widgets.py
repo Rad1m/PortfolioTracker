@@ -470,6 +470,73 @@ class StockDetailWidget(QFrame):
         self._content.setText("<pre>" + "\n".join(lines) + "</pre>")
 
 
+class NewsPanelWidget(QFrame):
+    """Sidebar panel showing portfolio-aware financial news."""
+
+    article_clicked = Signal(str)  # url
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(f"background: {C_SURFACE}; border-left: 1px solid #444;")
+        self.setFixedWidth(320)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(0)
+
+        title = QLabel("NEWS FEED")
+        title.setStyleSheet(f"color: {C_ACCENT}; font-weight: bold; font-size: 13px; padding-bottom: 8px;")
+        layout.addWidget(title)
+
+        from PySide6.QtWidgets import QListWidget, QListWidgetItem
+        self._list = QListWidget()
+        self._list.setStyleSheet(f"""
+            QListWidget {{
+                background: {C_SURFACE};
+                border: none;
+                color: {C_TEXT};
+                font-size: 12px;
+            }}
+            QListWidget::item {{
+                padding: 8px 4px;
+                border-bottom: 1px solid #333;
+            }}
+            QListWidget::item:selected {{
+                background: {C_SELECTION};
+            }}
+            QListWidget::item:hover {{
+                background: #333;
+            }}
+        """)
+        self._list.itemDoubleClicked.connect(self._on_item_clicked)
+        layout.addWidget(self._list)
+
+        hint = QLabel("Double-click to open in browser")
+        hint.setStyleSheet(f"color: {C_TEXT_DIM}; font-size: 11px; padding-top: 4px;")
+        hint.setAlignment(Qt.AlignCenter)
+        layout.addWidget(hint)
+
+        self._items = []  # list of NewsItem
+
+    def set_items(self, items):
+        from PySide6.QtWidgets import QListWidgetItem
+        self._items = items
+        self._list.clear()
+        for item in items:
+            text = f"[{item.ticker}]  {item.title}\n{item.published}"
+            if item.source:
+                text += f" · {item.source}"
+            list_item = QListWidgetItem(text)
+            list_item.setData(Qt.UserRole, item.url)
+            self._list.addItem(list_item)
+
+    def _on_item_clicked(self, item):
+        url = item.data(Qt.UserRole)
+        if url:
+            from news import open_article
+            open_article(url)
+
+
 class TreemapWidget(QWidget):
     """Treemap (tiles chart) sized by weight, colored red/green by daily change."""
 
